@@ -21,6 +21,9 @@ username). Also available as `python catalog.py --gallery`.
 Your key, settings and avatars live in the `catalog/` folder, which is never
 uploaded to GitHub.
 
+To get the latest version later, double-click **`update.bat`** (Windows). It
+downloads the newest files and keeps your `catalog/` folder untouched.
+
 ## What this does
 
 `catalog.py` finds Roblox avatars worth copying and saves them as
