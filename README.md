@@ -6,6 +6,17 @@ Could you possibly help me with that? and make like a catalog of users that woul
 
 Like what i usually do I just go on roblox search user and type random words like, boy, yellow, red, etc and look for flashy vibrant cool ones, i could pick some out so u would have an idea on what I mean by these characteristics
 
+## Quick start
+
+Double-click **`start.bat`** (Windows) or **`start.command`** (Mac) to open the
+menu, then choose **6** to paste your free
+[Gemini API key](https://aistudio.google.com/apikey). Full walkthrough with
+screenshots-style examples, settings and troubleshooting:
+**[Skin-Searcher-Guide.pdf](Skin-Searcher-Guide.pdf)**.
+
+Your key, settings and avatars live in the `catalog/` folder, which is never
+uploaded to GitHub.
+
 ## What this does
 
 `catalog.py` finds Roblox avatars worth copying and saves them as
@@ -38,20 +49,23 @@ so reruns only look at new people — running the same groups again just goes
 deeper into their member lists. People who couldn't be checked because of a
 temporary error are *not* remembered, so they get another chance next run.
 
-## Setup
+## Setup (command line)
 
 ```
 pip install -r requirements.txt
 ```
 
 For `--groups` and `--keywords`, get a free Gemini API key at
-https://aistudio.google.com/apikey and set it:
+https://aistudio.google.com/apikey. Either save it once from the menu
+(option 6), or set it for the session:
 
 ```
 export GEMINI_API_KEY=your-key-here
 ```
 
 ## Usage
+
+Run `python catalog.py` with no options for the menu, or use options:
 
 ```
 python catalog.py --groups outfits fashion drip
