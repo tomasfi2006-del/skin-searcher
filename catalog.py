@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Roblox avatar catalog builder.
 
-  --groups     pull members of Roblox groups (e.g. outfit/fashion groups) and
+Run with no options for an interactive menu, or use:
+
+  --groups    pull members of Roblox groups (e.g. outfit/fashion groups) and
                have Gemini judge their avatars in batches; matches are saved.
   --keywords   same, but finds people through Roblox user search (1 search/min).
   --usernames  save the avatars of specific users you picked yourself.
@@ -13,9 +15,11 @@ result are remembered, so reruns only look at new people.
 """
 import argparse
 import base64
+import getpass
 import json
 import os
 import random
+import subprocess
 import sys
 import threading
 import time
@@ -26,14 +30,20 @@ from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter
 
-STATE_PATH = Path("catalog/seen_users.json")
-OUTPUT_DIR = Path("catalog/avatars")
+# Anchored to this file so launching from another folder (e.g. start.bat) still works.
+CATALOG_DIR = Path(__file__).resolve().parent / "catalog"
+STATE_PATH = CATALOG_DIR / "seen_users.json"
+OUTPUT_DIR = CATALOG_DIR / "avatars"
+SETTINGS_PATH = CATALOG_DIR / "settings.json"
+KEY_PATH = CATALOG_DIR / "gemini_key.txt"
 
-DEFAULT_MAX_FOLLOWERS = 500
-DEFAULT_PER_KEYWORD = 100
-DEFAULT_PER_GROUP = 300
-DEFAULT_GROUPS_PER_TERM = 3
-DEFAULT_BATCH_SIZE = 10
+DEFAULT_SETTINGS = {
+    "max_followers": 500,
+    "per_group": 300,
+    "groups_per_term": 3,
+    "per_keyword": 100,
+    "batch_size": 10,
+}
 MAX_GROUP_PAGES = 50  # stop paging a group after 5,000 members even if most were already seen
 WORKERS = 8
 
@@ -91,6 +101,10 @@ VERDICT_SCHEMA = {
 
 
 class DailyQuotaExceeded(RuntimeError):
+    pass
+
+
+class InvalidApiKey(Exception):
     pass
 
 
@@ -329,7 +343,7 @@ class GeminiJudge:
                         last_error = f"{model}: unreadable reply"
                         continue
                 if resp.status_code in (401, 403) or "API_KEY_INVALID" in resp.text:
-                    sys.exit("Gemini rejected the API key - check GEMINI_API_KEY")
+                    raise InvalidApiKey("Gemini rejected the API key")
                 if resp.status_code == 404:
                     self._drop(model, "isn't available (renamed or retired?)")
                     break
@@ -365,6 +379,41 @@ def save_seen(seen):
 
 def save_avatar(user, image):
     (OUTPUT_DIR / f"{user['name']}.png").write_bytes(image)
+
+
+def load_settings():
+    settings = dict(DEFAULT_SETTINGS)
+    try:
+        saved = json.loads(SETTINGS_PATH.read_text())
+        settings.update({k: int(v) for k, v in saved.items() if k in settings})
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return settings
+
+
+def save_settings(settings):
+    CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(settings, indent=2))
+
+
+def get_api_key():
+    """GEMINI_API_KEY env var first, then the key saved from the menu."""
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        return KEY_PATH.read_text().strip() or None
+    except OSError:
+        return None
+
+
+def api_key_works(key):
+    try:
+        resp = requests.get(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODELS[0]}",
+                            headers={"x-goog-api-key": key}, timeout=20)
+        return resp.ok
+    except requests.RequestException:
+        return False
 
 
 # --- Modes ------------------------------------------------------------------
@@ -524,10 +573,7 @@ def search_groups(run):
             used += 1
 
 
-def run_auto(args, session, seen):
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        sys.exit("Set GEMINI_API_KEY (get a free key at https://aistudio.google.com/apikey)")
+def run_auto(args, session, seen, api_key):
     run = AutoRun(args, session, seen, GeminiJudge(api_key))
     try:
         if args.keywords:
@@ -547,24 +593,180 @@ def run_auto(args, session, seen):
             print(f"  {label}: {count}")
 
 
+# --- Menu -------------------------------------------------------------------
+
+SETTING_LABELS = {
+    "max_followers": "Skip accounts with more followers than",
+    "per_group": "New people to check per group",
+    "groups_per_term": "Groups to use per group search word",
+    "per_keyword": "People to pull per keyword",
+    "batch_size": "Avatars per Gemini request",
+}
+
+
+def ask_words(prompt, example):
+    while True:
+        words = input(f"{prompt}\n  (e.g. {example}): ").replace(",", " ").split()
+        if words:
+            return words
+        print("  Type at least one, or press Ctrl+C to go back.")
+
+
+def ask_number(prompt, default):
+    while True:
+        answer = input(f"{prompt} [{default}]: ").strip()
+        if not answer:
+            return default
+        if answer.isdigit() and int(answer) > 0:
+            return int(answer)
+        print("  Please type a whole number above 0, or press Enter to keep it.")
+
+
+def make_args(settings, **overrides):
+    values = {"groups": None, "keywords": None, "usernames": None, "shuffle": False, **settings, **overrides}
+    return argparse.Namespace(**values)
+
+
+def set_api_key():
+    print("\nYou need a free Gemini API key: https://aistudio.google.com/apikey")
+    key = getpass.getpass("Paste it here (it won't show on screen), then press Enter: ").strip()
+    if not key:
+        print("  No key entered.")
+        return None
+    print("  Checking the key...")
+    if not api_key_works(key):
+        print("  That key didn't work. Check you copied all of it and try again.")
+        return None
+    CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+    KEY_PATH.write_text(key)
+    print(f"  Key saved on this computer ({KEY_PATH.name}). It's never uploaded to GitHub.")
+    return key
+
+
+def require_api_key():
+    return get_api_key() or set_api_key()
+
+
+def open_folder(path):
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=True)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=True)
+    except (OSError, subprocess.CalledProcessError):
+        print(f"Couldn't open it automatically. Your avatars are in:\n  {path}")
+
+
+def menu_settings(settings):
+    while True:
+        print("\nSettings")
+        keys = list(SETTING_LABELS)
+        for i, key in enumerate(keys, 1):
+            print(f"  {i}) {SETTING_LABELS[key]}: {settings[key]}")
+        print("  0) Back")
+        choice = input("Which one to change? ").strip()
+        if choice in ("", "0"):
+            return
+        if not choice.isdigit() or not 1 <= int(choice) <= len(keys):
+            print("  Pick a number from the list.")
+            continue
+        key = keys[int(choice) - 1]
+        settings[key] = ask_number(SETTING_LABELS[key], settings[key])
+        save_settings(settings)
+        print("  Saved.")
+
+
+def menu_action(choice, session, settings):
+    seen = load_seen()
+    if choice == "1":
+        key = require_api_key()
+        if key:
+            words = ask_words("Group search words or group IDs", "outfits fashion drip")
+            per_group = ask_number("New people to check per group", settings["per_group"])
+            print("\nWorking... (Ctrl+C stops early and keeps what's found)\n")
+            run_auto(make_args(settings, groups=words, per_group=per_group), session, seen, key)
+    elif choice == "2":
+        key = require_api_key()
+        if key:
+            print("Note: Roblox allows only 1 user search per minute, so this is slower than groups.")
+            words = ask_words("Search words", "boy yellow red neon")
+            print("\nWorking... (Ctrl+C stops early and keeps what's found)\n")
+            run_auto(make_args(settings, keywords=words), session, seen, key)
+    elif choice == "3":
+        names = ask_words("Usernames to save", "Cone_phonky @Shark_Vibess")
+        print()
+        run_usernames(make_args(settings, usernames=names), session, seen)
+    elif choice == "4":
+        open_folder(OUTPUT_DIR)
+        return False
+    elif choice == "5":
+        menu_settings(settings)
+        return False
+    elif choice == "6":
+        set_api_key()
+    else:
+        print("Pick a number from the menu.")
+        return False
+    return True
+
+
+def menu():
+    session = make_session()
+    settings = load_settings()
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    while True:
+        saved = len(list(OUTPUT_DIR.glob("*.png")))
+        print("\n==============================")
+        print("        SKIN SEARCHER")
+        print("==============================")
+        print(f"  {saved} avatars saved | {len(load_seen())} people checked\n")
+        print("  1) Find avatars in groups   (best)")
+        print("  2) Find avatars by keyword  (slower)")
+        print("  3) Save specific usernames")
+        print("  4) Open the avatars folder")
+        print("  5) Settings")
+        print("  6) Change Gemini API key")
+        print("  0) Quit")
+        try:
+            choice = input("\nChoose: ").strip()
+            if choice in ("0", "q", "quit", "exit"):
+                return
+            if menu_action(choice, session, settings):
+                input("\nPress Enter to go back to the menu...")
+        except KeyboardInterrupt:
+            print("\nBack to the menu.")
+        except InvalidApiKey:
+            print("\nGemini rejected your API key. Choose 6 to enter a new one.")
+        except EOFError:
+            return
+
+
 def main():
+    if len(sys.argv) == 1:
+        menu()
+        return
+
+    settings = load_settings()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--groups", nargs="+",
                       help="group search terms or group IDs, e.g. outfits fashion 5215595 (auto-judged by Gemini)")
     mode.add_argument("--keywords", nargs="+", help="user search terms, e.g. boy yellow red (auto-judged by Gemini)")
     mode.add_argument("--usernames", nargs="+", help="usernames you picked yourself (saved directly, no Gemini)")
-    parser.add_argument("--per-group", type=int, default=DEFAULT_PER_GROUP,
-                        help=f"new members to judge per group (default {DEFAULT_PER_GROUP})")
-    parser.add_argument("--groups-per-term", type=int, default=DEFAULT_GROUPS_PER_TERM,
-                        help=f"top matching groups to use per search term (default {DEFAULT_GROUPS_PER_TERM})")
-    parser.add_argument("--per-keyword", type=int, default=DEFAULT_PER_KEYWORD,
-                        help=f"users to pull per keyword; each 100 costs one Roblox search minute (default {DEFAULT_PER_KEYWORD})")
+    parser.add_argument("--per-group", type=int, default=settings["per_group"],
+                        help="new members to judge per group (default %(default)s)")
+    parser.add_argument("--groups-per-term", type=int, default=settings["groups_per_term"],
+                        help="top matching groups to use per search term (default %(default)s)")
+    parser.add_argument("--per-keyword", type=int, default=settings["per_keyword"],
+                        help="users to pull per keyword; each 100 costs one Roblox search minute (default %(default)s)")
     parser.add_argument("--shuffle", action="store_true", help="randomize keyword order")
-    parser.add_argument("--max-followers", type=int, default=DEFAULT_MAX_FOLLOWERS,
-                        help=f"skip accounts with more followers than this (default {DEFAULT_MAX_FOLLOWERS})")
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
-                        help=f"avatars per Gemini request (default {DEFAULT_BATCH_SIZE})")
+    parser.add_argument("--max-followers", type=int, default=settings["max_followers"],
+                        help="skip accounts with more followers than this (default %(default)s)")
+    parser.add_argument("--batch-size", type=int, default=settings["batch_size"],
+                        help="avatars per Gemini request (default %(default)s)")
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -572,8 +774,15 @@ def main():
     seen = load_seen()
     if args.usernames:
         run_usernames(args, session, seen)
-    else:
-        run_auto(args, session, seen)
+        return
+    api_key = get_api_key()
+    if not api_key:
+        sys.exit("No Gemini API key. Run without options to set one in the menu, "
+                 "or set GEMINI_API_KEY (free key: https://aistudio.google.com/apikey)")
+    try:
+        run_auto(args, session, seen, api_key)
+    except InvalidApiKey:
+        sys.exit("Gemini rejected the API key - set a new one from the menu (option 6)")
 
 
 if __name__ == "__main__":

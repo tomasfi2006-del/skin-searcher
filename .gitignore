@@ -1,4 +1,3 @@
-catalog/avatars/
-catalog/seen_users.json
+catalog/
 __pycache__/
 *.pyc
