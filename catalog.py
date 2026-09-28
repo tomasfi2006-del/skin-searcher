@@ -3,10 +3,11 @@
 
 Run with no options for an interactive menu, or use:
 
-  --groups    pull members of Roblox groups (e.g. outfit/fashion groups) and
+  --groups     pull members of Roblox groups (e.g. outfit/fashion groups) and
                have Gemini judge their avatars in batches; matches are saved.
   --keywords   same, but finds people through Roblox user search (1 search/min).
   --usernames  save the avatars of specific users you picked yourself.
+  --gallery    open a page showing every saved avatar in a grid.
 
 Accounts with more than --max-followers followers are always skipped.
 
@@ -26,6 +27,7 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -593,6 +595,112 @@ def run_auto(args, session, seen, api_key):
             print(f"  {label}: {count}")
 
 
+# --- Gallery ----------------------------------------------------------------
+
+GALLERY_PATH = CATALOG_DIR / "gallery.html"
+
+GALLERY_TEMPLATE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skin Searcher gallery</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--ink:#1b1f2a;--muted:#5b6272;--line:#d9dce6;--accent:#4f46e5;--stage:#eef0f6;--size:200px}
+@media (prefers-color-scheme:dark){:root{--bg:#12141b;--card:#1c2030;--ink:#eceef6;--muted:#9aa1b5;--line:#2c3247;--accent:#8b85ff;--stage:#e9ebf3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line)}
+h1{font-size:18px;margin:0}
+.count{color:var(--muted);font-size:14px}
+.tools{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin-left:auto}
+input[type=search],select{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+input[type=search]{width:190px}
+label{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:14px}
+main{padding:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--size),1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;padding:0;text-align:left;color:inherit;font:inherit}
+.card:hover,.card:focus-visible{border-color:var(--accent);outline:none;box-shadow:0 0 0 2px var(--accent)}
+.stage{background:var(--stage);aspect-ratio:1/1}
+.stage img{width:100%;height:100%;object-fit:contain;display:block}
+.name{padding:9px 11px;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{color:var(--muted);text-align:center;padding:60px 20px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;opacity:0;transition:.2s;pointer-events:none;font-size:14px}
+#toast.show{opacity:1;transform:translateX(-50%)}
+</style></head><body>
+<header>
+<h1>Skin Searcher</h1><span class="count" id="count"></span>
+<div class="tools">
+<input type="search" id="q" placeholder="Search usernames" aria-label="Search usernames">
+<select id="sort" aria-label="Sort"><option value="new">Newest first</option><option value="az">A to Z</option></select>
+<label>Size <input type="range" id="size" min="110" max="420" value="200"></label>
+</div></header>
+<main><div class="grid" id="grid"></div><div class="empty" id="empty" hidden></div></main>
+<div id="toast" role="status"></div>
+<script>
+const AVATARS=__DATA__;
+const grid=document.getElementById("grid"),empty=document.getElementById("empty"),toast=document.getElementById("toast");
+let timer;
+function say(t){toast.textContent=t;toast.classList.add("show");clearTimeout(timer);timer=setTimeout(()=>toast.classList.remove("show"),1600)}
+function copy(name){
+  const done=()=>say("Copied "+name);
+  if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(name).then(done,()=>fallback(name,done))}else fallback(name,done)
+}
+function fallback(name,done){const t=document.createElement("textarea");t.value=name;t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();
+  try{document.execCommand("copy");done()}catch(e){say("Couldn't copy - select it by hand: "+name)}t.remove()}
+function render(){
+  const q=document.getElementById("q").value.trim().toLowerCase(),sort=document.getElementById("sort").value;
+  const list=AVATARS.filter(a=>a.name.toLowerCase().includes(q));
+  list.sort(sort==="az"?(a,b)=>a.name.toLowerCase().localeCompare(b.name.toLowerCase()):(a,b)=>b.time-a.time);
+  grid.textContent="";
+  for(const a of list){
+    const b=document.createElement("button");b.className="card";b.title="Click to copy the username";
+    const s=document.createElement("div");s.className="stage";
+    const i=document.createElement("img");i.loading="lazy";i.alt=a.name;i.src=a.file;s.appendChild(i);
+    const n=document.createElement("div");n.className="name";n.textContent=a.name;
+    b.append(s,n);b.addEventListener("click",()=>copy(a.name));grid.appendChild(b)}
+  document.getElementById("count").textContent=list.length===AVATARS.length?AVATARS.length+" avatars":list.length+" of "+AVATARS.length+" avatars";
+  empty.hidden=list.length>0;
+  empty.textContent=AVATARS.length?"No usernames match your search.":"No avatars yet. Run a search from the menu, then open this page again."}
+document.getElementById("q").addEventListener("input",render);
+document.getElementById("sort").addEventListener("change",render);
+document.getElementById("size").addEventListener("input",e=>document.documentElement.style.setProperty("--size",e.target.value+"px"));
+render();
+</script></body></html>
+"""
+
+
+def build_gallery():
+    """Writes catalog/gallery.html listing every saved avatar; returns how many there are."""
+    avatars = []
+    for path in OUTPUT_DIR.glob("*.png"):
+        avatars.append({"name": path.stem, "file": "avatars/" + quote(path.name),
+                        "time": int(path.stat().st_mtime)})
+    data = json.dumps(avatars).replace("</", "<\\/")
+    CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+    GALLERY_PATH.write_text(GALLERY_TEMPLATE.replace("__DATA__", data), encoding="utf-8")
+    return len(avatars)
+
+
+def open_path(path):
+    """Opens a file or folder with the computer's default app."""
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=True)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=True)
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
+def show_gallery():
+    count = build_gallery()
+    print(f"Gallery updated: {count} avatars.")
+    if not open_path(GALLERY_PATH):
+        print(f"Couldn't open it automatically. Open this file in your browser:\n  {GALLERY_PATH}")
+
+
 # --- Menu -------------------------------------------------------------------
 
 SETTING_LABELS = {
@@ -649,14 +757,7 @@ def require_api_key():
 
 def open_folder(path):
     path.mkdir(parents=True, exist_ok=True)
-    try:
-        if sys.platform.startswith("win"):
-            os.startfile(path)
-        elif sys.platform == "darwin":
-            subprocess.run(["open", str(path)], check=True)
-        else:
-            subprocess.run(["xdg-open", str(path)], check=True)
-    except (OSError, subprocess.CalledProcessError):
+    if not open_path(path):
         print(f"Couldn't open it automatically. Your avatars are in:\n  {path}")
 
 
@@ -700,12 +801,15 @@ def menu_action(choice, session, settings):
         print()
         run_usernames(make_args(settings, usernames=names), session, seen)
     elif choice == "4":
-        open_folder(OUTPUT_DIR)
+        show_gallery()
         return False
     elif choice == "5":
-        menu_settings(settings)
+        open_folder(OUTPUT_DIR)
         return False
     elif choice == "6":
+        menu_settings(settings)
+        return False
+    elif choice == "7":
         set_api_key()
     else:
         print("Pick a number from the menu.")
@@ -726,9 +830,10 @@ def menu():
         print("  1) Find avatars in groups   (best)")
         print("  2) Find avatars by keyword  (slower)")
         print("  3) Save specific usernames")
-        print("  4) Open the avatars folder")
-        print("  5) Settings")
-        print("  6) Change Gemini API key")
+        print("  4) View all avatars in a grid")
+        print("  5) Open the avatars folder")
+        print("  6) Settings")
+        print("  7) Change Gemini API key")
         print("  0) Quit")
         try:
             choice = input("\nChoose: ").strip()
@@ -739,7 +844,7 @@ def menu():
         except KeyboardInterrupt:
             print("\nBack to the menu.")
         except InvalidApiKey:
-            print("\nGemini rejected your API key. Choose 6 to enter a new one.")
+            print("\nGemini rejected your API key. Choose 7 to enter a new one.")
         except EOFError:
             return
 
@@ -756,6 +861,7 @@ def main():
                       help="group search terms or group IDs, e.g. outfits fashion 5215595 (auto-judged by Gemini)")
     mode.add_argument("--keywords", nargs="+", help="user search terms, e.g. boy yellow red (auto-judged by Gemini)")
     mode.add_argument("--usernames", nargs="+", help="usernames you picked yourself (saved directly, no Gemini)")
+    mode.add_argument("--gallery", action="store_true", help="open a page showing every saved avatar in a grid")
     parser.add_argument("--per-group", type=int, default=settings["per_group"],
                         help="new members to judge per group (default %(default)s)")
     parser.add_argument("--groups-per-term", type=int, default=settings["groups_per_term"],
@@ -770,6 +876,9 @@ def main():
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if args.gallery:
+        show_gallery()
+        return
     session = make_session()
     seen = load_seen()
     if args.usernames:
@@ -782,7 +891,7 @@ def main():
     try:
         run_auto(args, session, seen, api_key)
     except InvalidApiKey:
-        sys.exit("Gemini rejected the API key - set a new one from the menu (option 6)")
+        sys.exit("Gemini rejected the API key - set a new one from the menu (option 7)")
 
 
 if __name__ == "__main__":
