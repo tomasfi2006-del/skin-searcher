@@ -19,6 +19,7 @@ from pathlib import Path
 import requests
 
 ROBLOX_SEARCH_URL = "https://users.roblox.com/v1/users/search"
+ROBLOX_USERNAMES_URL = "https://users.roblox.com/v1/usernames/users"
 ROBLOX_THUMB_URL = "https://thumbnails.roblox.com/v1/users/avatar"
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -93,6 +94,27 @@ def search_users(keyword, limit, session):
     return users[:limit]
 
 
+def resolve_usernames(usernames, session):
+    """Look up userId + canonical name for a list of usernames (handles case)."""
+    found = []
+    for i in range(0, len(usernames), 100):
+        batch = usernames[i:i + 100]
+        resp = session.post(
+            ROBLOX_USERNAMES_URL,
+            json={"usernames": batch, "excludeBannedUsers": True},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        resolved_lower = {u["requestedUsername"].lower() for u in data}
+        for name in batch:
+            if name.lower() not in resolved_lower:
+                print(f"  {name}: not found (typo, banned, or renamed)")
+        found.extend(data)
+        time.sleep(0.3)
+    return found
+
+
 def fetch_thumbnails(user_ids, session):
     thumbs = {}
     for i in range(0, len(user_ids), 100):
@@ -156,23 +178,49 @@ def judge_avatar(image_bytes, api_key, retries_per_model=2):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--keywords", nargs="+", required=True, help="Search terms, e.g. boy yellow red cool")
-    parser.add_argument("--per-keyword", type=int, default=25, help="How many users to pull per keyword")
-    parser.add_argument("--shuffle", action="store_true", help="Randomize keyword order")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--keywords", nargs="+", help="Search terms, e.g. boy yellow red cool (auto-judged by Gemini)")
+    mode.add_argument("--usernames", nargs="+", help="Specific usernames you already picked (saved directly, no Gemini)")
+    parser.add_argument("--per-keyword", type=int, default=25, help="How many users to pull per keyword (--keywords mode)")
+    parser.add_argument("--shuffle", action="store_true", help="Randomize keyword order (--keywords mode)")
     args = parser.parse_args()
+
+    session = requests.Session()
+    seen = load_seen()
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    added = 0
+
+    if args.usernames:
+        names = [n.lstrip("@") for n in args.usernames]
+        users = resolve_usernames(names, session)
+        thumbs = fetch_thumbnails([u["id"] for u in users], session)
+        for user in users:
+            image_url = thumbs.get(user["id"])
+            if not image_url:
+                print(f"  {user['name']}: no avatar render available, skipped")
+                continue
+            try:
+                img_resp = session.get(image_url, timeout=15)
+                img_resp.raise_for_status()
+            except requests.RequestException as e:
+                print(f"  {user['name']}: skipped ({e})")
+                continue
+            seen.add(user["id"])
+            out_path = OUTPUT_DIR / f"{user['name']}.png"
+            out_path.write_bytes(img_resp.content)
+            print(f"  + {user['name']}")
+            added += 1
+        save_seen(seen)
+        print(f"\nDone. Added {added} new avatar(s) to {OUTPUT_DIR}/")
+        return
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         sys.exit("Set GEMINI_API_KEY (get a free key at https://aistudio.google.com/apikey)")
 
-    session = requests.Session()
-    seen = load_seen()
     keywords = list(args.keywords)
     if args.shuffle:
         random.shuffle(keywords)
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    added = 0
 
     for kw in keywords:
         print(f"Searching '{kw}'...")

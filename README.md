@@ -8,15 +8,23 @@ Like what i usually do I just go on roblox search user and type random words lik
 
 ## What this does
 
-`catalog.py` automates the manual search: it searches Roblox usernames for
-whatever keywords you give it (`boy`, `yellow`, `red`, etc), downloads each
-candidate's current avatar render, and asks Gemini to judge if it looks
-flashy/vibrant/cool. Anything that passes gets saved as `catalog/avatars/<username>.png`
-so you can grab the username straight from the filename for your copy command.
+`catalog.py` has two modes. Either way, matches get saved as
+`catalog/avatars/<username>.png` — grab the username straight from the
+filename for your copy command.
 
-Every user it checks (pass or fail) is remembered in `catalog/seen_users.json`,
-so running it again later only looks at new people instead of re-scoring the
-same accounts.
+**Auto mode** (`--keywords`) automates the manual search: it searches Roblox
+usernames for whatever keywords you give it (`boy`, `yellow`, `red`, etc),
+downloads each candidate's current avatar render, and asks Gemini to judge
+if it looks flashy/vibrant/cool.
+
+**Manual mode** (`--usernames`) is for when you've already spotted good ones
+yourself by browsing Roblox — just hand it the usernames (with or without
+the `@`) and it resolves each one, downloads the avatar, and saves it
+straight away. No Gemini call, no quota used.
+
+In `--keywords` mode, every user it checks (pass or fail) is remembered in
+`catalog/seen_users.json`, so running it again later only looks at new
+people instead of re-scoring the same accounts.
 
 ## Setup
 
@@ -24,24 +32,30 @@ same accounts.
 pip install -r requirements.txt
 ```
 
-Get a free Gemini API key at https://aistudio.google.com/apikey and set it:
+For `--keywords` mode, get a free Gemini API key at
+https://aistudio.google.com/apikey and set it:
 
 ```
 export GEMINI_API_KEY=your-key-here
 ```
 
+`--usernames` mode needs no API key at all.
+
 ## Usage
 
 ```
 python catalog.py --keywords boy yellow red cool --per-keyword 25
+python catalog.py --usernames Cone_phonky Shark_Vibess RedGuy1011
 ```
 
-- `--keywords` — search terms, same as what you'd type into Roblox's user search
+- `--keywords` — search terms, same as what you'd type into Roblox's user search (auto-judged by Gemini)
 - `--per-keyword` — how many users to pull per keyword (default 25)
 - `--shuffle` — randomize the order keywords are processed in
+- `--usernames` — specific usernames you already picked; saved directly, no Gemini involved
 
-Run it again anytime with the same or new keywords to add more avatars to the
-catalog — already-checked users are skipped automatically.
+Run it again anytime with new keywords or usernames to add more avatars to
+the catalog — in `--keywords` mode, already-checked users are skipped
+automatically.
 
 Uses `gemini-3.5-flash-lite` and `gemini-3.1-flash-lite`, alternating between
 them for every avatar. Each is capped on the free tier at 15 requests/min and
