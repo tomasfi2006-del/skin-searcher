@@ -9,7 +9,7 @@ Like what i usually do I just go on roblox search user and type random words lik
 ## Quick start
 
 Double-click **`start.bat`** (Windows) or **`start.command`** (Mac) to open the
-menu, then choose **7** to paste your free
+menu, then choose **8** to paste your free
 [Gemini API key](https://aistudio.google.com/apikey). Full walkthrough with
 screenshots-style examples, settings and troubleshooting:
 **[Skin-Searcher-Guide.pdf](Skin-Searcher-Guide.pdf)**.
@@ -18,11 +18,37 @@ To look through what it found, choose **4**: a page opens in your browser with
 every saved avatar in a grid (search, sort, resize, click one to copy its
 username). Also available as `python catalog.py --gallery`.
 
+## Teach it your taste
+
+On that same page, every avatar has **Perfect** and **Dislike** buttons.
+Dislike removes the avatar from your catalog (with an Undo, and optional
+one-click reasons: too plain / messy random mix / not my style). Perfect marks
+the ones you love. Avatars you save by hand with option 3 count as Perfect
+automatically.
+
+**Discover** (menu option 5, or `python catalog.py --discover`) is the fastest way
+to teach it: fresh avatars from outfit/fashion groups appear one at a time and
+you rate them with the arrow keys (left = dislike, right = perfect, down = skip,
+Z = undo, 1-3 = why). Perfect ones are saved to your catalog, unless the account
+has more followers than your limit (then it only counts as a taste example).
+Because these avatars are unfiltered, it also shows what the AI would wrongly
+have thrown away.
+
+Your ratings are used on every later search: each request to the AI includes a
+few avatars you rated Perfect and a few you Disliked (picked at random from all
+your ratings), plus your most common reasons for rejecting. So the more you
+rate, the closer it gets to your taste. The menu shows your ratings and the
+"% kept" so you can watch it improve. The review page runs only on your own
+computer and stops when you press Enter in the menu window.
+
 Your key, settings and avatars live in the `catalog/` folder, which is never
 uploaded to GitHub.
 
-To get the latest version later, double-click **`update.bat`** (Windows). It
-downloads the newest files and keeps your `catalog/` folder untouched.
+To get the latest version later, double-click **`updat.bat`** (Windows). In a
+git clone it stashes any uncommitted changes, fast-forwards `main` (backing up
+any local commits first), and shows what's new. In a folder from a ZIP it
+downloads the newest ZIP and copies it over. Either way your `catalog/`
+folder is left untouched. (Its messages are in Portuguese.)
 
 ## What this does
 
@@ -64,7 +90,7 @@ pip install -r requirements.txt
 
 For `--groups` and `--keywords`, get a free Gemini API key at
 https://aistudio.google.com/apikey. Either save it once from the menu
-(option 7), or set it for the session:
+(option 8), or set it for the session:
 
 ```
 export GEMINI_API_KEY=your-key-here
@@ -85,7 +111,8 @@ python catalog.py --gallery
 - `--groups` — group search terms (uses the top matches) or group IDs from a group's URL
 - `--keywords` — user search terms, same as Roblox's user search bar
 - `--usernames` — specific usernames you already picked
-- `--gallery` — open a page showing every saved avatar in a grid
+- `--gallery` — review saved avatars in a grid: copy names, mark Perfect / Dislike
+- `--discover [words]` — rate fresh avatars from groups with the arrow keys
 - `--per-group` — new members to judge per group (default 300)
 - `--groups-per-term` — how many matching groups to use per search term (default 3)
 - `--per-keyword` — users to pull per keyword (default 100)
