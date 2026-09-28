@@ -44,7 +44,7 @@ computer and stops when you press Enter in the menu window.
 Your key, settings and avatars live in the `catalog/` folder, which is never
 uploaded to GitHub.
 
-To get the latest version later, double-click **`update.bat`** (Windows). In a
+To get the latest version later, double-click **`updat.bat`** (Windows). In a
 git clone it stashes any uncommitted changes, fast-forwards `main` (backing up
 any local commits first), and shows what's new. In a folder from a ZIP it
 downloads the newest ZIP and copies it over. Either way your `catalog/`
