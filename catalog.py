@@ -55,22 +55,24 @@ GEMINI_MIN_INTERVAL = 4.2  # per model: free tier allows 15 requests/min each
 JUDGE_PROMPT = """You are helping a Roblox content creator pick avatars to \
 feature in recordings by literally copying the look onto themselves. You \
 will see {n} avatar renders, each labeled "Avatar N:". Judge each one on its \
-own (do not compare them to each other). An avatar passes only if ALL of \
-these are true:
+own (do not compare them to each other).
 
-1. Has a clear, intentional character concept - not a random mismatch of \
-default Roblox part colors.
-2. Built around one standout hat/headpiece or signature accessory that \
-catches the eye - not a bare head with no distinguishing piece.
-3. Uses a deliberate, bold color story: either strong saturated color \
-blocking, OR a striking monochrome/high-contrast palette (all black, all \
-red, black + one bold accent color, etc). Plain, dull, washed-out, or \
-default-Roblox-tone colors do NOT count.
-4. Clean silhouette - NOT visually cluttered or overloaded with too many \
-stacked accessories/items at once.
+An avatar is a match if it stands out and has personality - something a \
+viewer would notice in a video. Good signs (it does NOT need all of them):
+- a standout hat/headpiece or signature accessory
+- a clear character or theme: costume, job, meme, fantasy, anime, etc \
+(famous characters like Sonic or Santa are fine)
+- bold color: saturated colors, a rainbow/gradient, or a striking \
+monochrome/high-contrast look (all black, all red, black + one accent)
+- a funny or quirky touch: text shirt, silly face, props, pets, effects
 
-Costumes/characters (Sonic, superheroes, Santa, anime references, etc) are \
-totally fine and often good - do not penalize for that.
+Reject it only if:
+- it looks plain or default: basic shirt and pants, default skin tones and \
+colors, nothing interesting on the head, OR
+- it's piled with so many accessories that the character is hard to read \
+(a few accessories are fine).
+
+When unsure between a fun, eye-catching look and a plain one, pick the fun one.
 
 Return one entry per avatar with its number, the verdict, and a short reason."""
 
