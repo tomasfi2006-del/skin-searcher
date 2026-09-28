@@ -9,10 +9,14 @@ Like what i usually do I just go on roblox search user and type random words lik
 ## Quick start
 
 Double-click **`start.bat`** (Windows) or **`start.command`** (Mac) to open the
-menu, then choose **6** to paste your free
+menu, then choose **7** to paste your free
 [Gemini API key](https://aistudio.google.com/apikey). Full walkthrough with
 screenshots-style examples, settings and troubleshooting:
 **[Skin-Searcher-Guide.pdf](Skin-Searcher-Guide.pdf)**.
+
+To look through what it found, choose **4**: a page opens in your browser with
+every saved avatar in a grid (search, sort, resize, click one to copy its
+username). Also available as `python catalog.py --gallery`.
 
 Your key, settings and avatars live in the `catalog/` folder, which is never
 uploaded to GitHub.
@@ -57,7 +61,7 @@ pip install -r requirements.txt
 
 For `--groups` and `--keywords`, get a free Gemini API key at
 https://aistudio.google.com/apikey. Either save it once from the menu
-(option 6), or set it for the session:
+(option 7), or set it for the session:
 
 ```
 export GEMINI_API_KEY=your-key-here
@@ -72,11 +76,13 @@ python catalog.py --groups outfits fashion drip
 python catalog.py --groups 5215595 906726123
 python catalog.py --keywords boy yellow red cool
 python catalog.py --usernames Cone_phonky Shark_Vibess RedGuy1011
+python catalog.py --gallery
 ```
 
 - `--groups` — group search terms (uses the top matches) or group IDs from a group's URL
 - `--keywords` — user search terms, same as Roblox's user search bar
 - `--usernames` — specific usernames you already picked
+- `--gallery` — open a page showing every saved avatar in a grid
 - `--per-group` — new members to judge per group (default 300)
 - `--groups-per-term` — how many matching groups to use per search term (default 3)
 - `--per-keyword` — users to pull per keyword (default 100)
