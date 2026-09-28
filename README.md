@@ -18,6 +18,21 @@ To look through what it found, choose **4**: a page opens in your browser with
 every saved avatar in a grid (search, sort, resize, click one to copy its
 username). Also available as `python catalog.py --gallery`.
 
+## Teach it your taste
+
+On that same page, every avatar has **Perfect** and **Dislike** buttons.
+Dislike removes the avatar from your catalog (with an Undo, and optional
+one-click reasons: too plain / messy random mix / not my style). Perfect marks
+the ones you love. Avatars you save by hand with option 3 count as Perfect
+automatically.
+
+Your ratings are used on every later search: each request to the AI includes a
+few avatars you rated Perfect and a few you Disliked (picked at random from all
+your ratings), plus your most common reasons for rejecting. So the more you
+rate, the closer it gets to your taste. The menu shows your ratings and the
+"% kept" so you can watch it improve. The review page runs only on your own
+computer and stops when you press Enter in the menu window.
+
 Your key, settings and avatars live in the `catalog/` folder, which is never
 uploaded to GitHub.
 
@@ -88,7 +103,7 @@ python catalog.py --gallery
 - `--groups` — group search terms (uses the top matches) or group IDs from a group's URL
 - `--keywords` — user search terms, same as Roblox's user search bar
 - `--usernames` — specific usernames you already picked
-- `--gallery` — open a page showing every saved avatar in a grid
+- `--gallery` — review saved avatars in a grid: copy names, mark Perfect / Dislike
 - `--per-group` — new members to judge per group (default 300)
 - `--groups-per-term` — how many matching groups to use per search term (default 3)
 - `--per-keyword` — users to pull per keyword (default 100)
