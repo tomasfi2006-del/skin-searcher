@@ -21,8 +21,11 @@ username). Also available as `python catalog.py --gallery`.
 Your key, settings and avatars live in the `catalog/` folder, which is never
 uploaded to GitHub.
 
-To get the latest version later, double-click **`update.bat`** (Windows). It
-downloads the newest files and keeps your `catalog/` folder untouched.
+To get the latest version later, double-click **`update.bat`** (Windows). In a
+git clone it stashes any uncommitted changes, fast-forwards `main` (backing up
+any local commits first), and shows what's new. In a folder from a ZIP it
+downloads the newest ZIP and copies it over. Either way your `catalog/`
+folder is left untouched. (Its messages are in Portuguese.)
 
 ## What this does
 
