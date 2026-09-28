@@ -8,6 +8,7 @@ Run with no options for an interactive menu, or use:
   --keywords   same, but finds people through Roblox user search (1 search/min).
   --usernames  save the avatars of specific users you picked yourself.
   --gallery    review saved avatars in a grid; your Perfect/Dislike ratings teach the AI.
+  --discover   rate fresh avatars from groups with the arrow keys - the fastest way to teach the AI.
 
 Accounts with more than --max-followers followers are always skipped.
 
@@ -28,7 +29,7 @@ import sys
 import threading
 import time
 import webbrowser
-from collections import Counter
+from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -49,6 +50,7 @@ EXAMPLES_PER_SIDE = 4  # rated avatars of each kind shown to Gemini with every r
 DISLIKE_REASONS = ["Too plain", "Messy / random mix", "Not my style"]
 NAME_RE = re.compile(r"[A-Za-z0-9_]{1,40}")  # Roblox usernames
 
+DISCOVER_DEFAULT_TERMS = ["outfits", "fashion"]
 DEFAULT_SETTINGS = {
     "max_followers": 500,
     "per_group": 300,
@@ -490,6 +492,131 @@ def rate_avatar(name, action, reason=None):
     return feedback_stats(feedback)
 
 
+def rate_candidate(cand, action, reason, session, max_followers):
+    """Records a rating for an avatar shown in discovery (it isn't in the catalog yet).
+
+    like     saves it to the catalog (if the account isn't too well-known) and remembers it as a good example.
+    dislike  remembers it as a bad example.
+    reason   adds a reason to a dislike.
+    undo     removes everything a discovery rating created.
+    Returns (stats, info).
+    """
+    name = cand["name"]
+    if action == "reason":
+        return rate_avatar(name, "reason", reason), {}
+    if action == "undo":
+        feedback = load_feedback()
+        entry = feedback.pop(name, {})
+        (FEEDBACK_DIR / "liked" / f"{name}.png").unlink(missing_ok=True)
+        (FEEDBACK_DIR / "disliked" / f"{name}.png").unlink(missing_ok=True)
+        if entry.get("in_catalog"):
+            (OUTPUT_DIR / f"{name}.png").unlink(missing_ok=True)
+        save_feedback(feedback)
+        return feedback_stats(feedback), {}
+    if action not in ("like", "dislike"):
+        raise ValueError("bad action")
+
+    verdict = "liked" if action == "like" else "disliked"
+    entry = {"verdict": verdict, "time": int(time.time()), "source": "discovery"}
+    info = {}
+    folder = FEEDBACK_DIR / verdict
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{name}.png").write_bytes(cand["image"])
+    if action == "like":
+        count = follower_counts(session, [{"id": cand["id"]}]).get(cand["id"])
+        info["followers"] = count
+        entry["in_catalog"] = info["saved"] = count is not None and count <= max_followers
+        if entry["in_catalog"]:
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            save_avatar(cand, cand["image"])
+    elif reason in DISLIKE_REASONS:
+        entry["reason"] = reason
+    feedback = load_feedback()
+    feedback[name] = entry
+    save_feedback(feedback)
+    seen = load_seen()
+    seen.add(cand["id"])
+    save_seen(seen)
+    return feedback_stats(feedback), info
+
+
+class CandidateFeed:
+    """Loads fresh, not-yet-judged avatars in the background for the discovery page."""
+
+    def __init__(self, session, terms, ready_target=30):
+        self.session, self.terms, self.ready_target = session, terms, ready_target
+        self.ready = deque()
+        self.shown = {}
+        self.handed = set()
+        self.finished = False
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _streams(self):
+        streams = []
+        for term in self.terms:
+            try:
+                groups = find_groups(self.session, term)
+            except requests.RequestException:
+                continue
+            used = 0
+            for group in groups:
+                if used >= DEFAULT_SETTINGS["groups_per_term"] or self.stop.is_set():
+                    break
+                pages = group_member_pages(self.session, group["id"])
+                try:
+                    first = next(pages)  # groups with hidden member lists fail here
+                except (requests.RequestException, StopIteration):
+                    continue
+                streams.append([pages, first])
+                used += 1
+        return streams
+
+    def _run(self):
+        try:
+            streams = self._streams()
+            while streams and not self.stop.is_set():
+                if len(self.ready) >= self.ready_target:
+                    time.sleep(0.4)
+                    continue
+                stream = streams.pop(0)
+                page, stream[1] = stream[1], None
+                try:
+                    page = page if page is not None else next(stream[0])
+                except (requests.RequestException, StopIteration):
+                    continue  # this group is used up or failed: drop it
+                streams.append(stream)
+                self._queue_page(page)
+        finally:
+            self.finished = True
+
+    def _queue_page(self, page):
+        seen, rated = load_seen(), load_feedback()
+        fresh = [u for u in page
+                 if u["id"] not in seen and u["id"] not in self.handed and u["name"] not in rated
+                 and not u.get("hasVerifiedBadge") and NAME_RE.fullmatch(u["name"])
+                 and not (OUTPUT_DIR / f"{u['name']}.png").exists()]
+        random.shuffle(fresh)
+        fresh = fresh[:30]
+        self.handed.update(u["id"] for u in fresh)
+        images = fetch_avatar_images(self.session, [u["id"] for u in fresh])
+        with self.lock:
+            for u in fresh:
+                if u["id"] in images:
+                    self.ready.append({"id": u["id"], "name": u["name"], "image": images[u["id"]]})
+
+    def take(self, n):
+        """Hands out up to n avatars. Returns (names, done) - done means nothing more is coming."""
+        with self.lock:
+            items = [self.ready.popleft() for _ in range(min(n, len(self.ready)))]
+            for item in items:
+                self.shown[item["name"]] = item
+            return [i["name"] for i in items], (self.finished and not self.ready)
+
+
 def pick_examples(per_side=EXAMPLES_PER_SIDE):
     """A random sample of rated avatars to show Gemini: {'liked': [bytes], 'disliked': [(bytes, reason)]}."""
     feedback = load_feedback()
@@ -769,6 +896,7 @@ main{padding:20px}
 </style></head><body>
 <header>
 <h1>Skin Searcher</h1><span class="count" id="count"></span><span class="stats" id="stats"></span>
+<a id="nav" href="#" hidden style="color:var(--accent);text-decoration:none;font-size:14px">Discover new avatars</a>
 <div class="tools">
 <input type="search" id="q" placeholder="Search usernames" aria-label="Search usernames">
 <select id="show" aria-label="Show"><option value="all">Show all</option><option value="new">Not rated yet</option><option value="liked">Perfect only</option></select>
@@ -779,7 +907,7 @@ main{padding:20px}
 <main><div class="grid" id="grid"></div><div class="empty" id="empty" hidden></div></main>
 <div id="bar" role="status"></div>
 <script>
-const REVIEW=__REVIEW__, REASONS=__REASONS__;
+const REVIEW=__REVIEW__, REASONS=__REASONS__, DISCOVER=__DISCOVER__;
 let AVATARS=__DATA__, STATS=__STATS__;
 const TOKEN=new URLSearchParams(location.search).get("t")||"";
 const $=id=>document.getElementById(id), grid=$("grid"), bar=$("bar");
@@ -830,6 +958,7 @@ function render(){
   $("count").textContent=list.length===AVATARS.length?AVATARS.length+" avatars":list.length+" of "+AVATARS.length+" avatars";
   $("empty").hidden=list.length>0;
   $("empty").textContent=AVATARS.length?"Nothing matches.":"No avatars yet. Run a search from the menu, then open this page again."}
+$("nav").hidden=!DISCOVER;$("nav").href="/discover?t="+encodeURIComponent(TOKEN);
 $("hint").hidden=!REVIEW;
 $("hint").textContent="Click an avatar to copy its username. Mark the ones you love as Perfect and remove the bad ones with Dislike - the AI uses your ratings to pick better next time.";
 for(const id of ["q","sort","show"])$(id).addEventListener(id==="q"?"input":"change",render);
@@ -839,7 +968,105 @@ showStats();render();
 """
 
 
-def gallery_html(review, prefix=""):
+DISCOVER_TEMPLATE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skin Searcher - Discover</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--ink:#1b1f2a;--muted:#5b6272;--line:#d9dce6;--accent:#4f46e5;--stage:#eef0f6;--good:#1f8f4e;--bad:#c2372f}
+@media (prefers-color-scheme:dark){:root{--bg:#12141b;--card:#1c2030;--ink:#eceef6;--muted:#9aa1b5;--line:#2c3247;--accent:#8b85ff;--stage:#e9ebf3;--good:#4cc07f;--bad:#ff7a70}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line)}
+h1{font-size:18px;margin:0}.muted{color:var(--muted);font-size:14px}
+header a{margin-left:auto;color:var(--accent);text-decoration:none;font-size:14px}
+main{max-width:520px;margin:0 auto;padding:20px 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.stage{background:var(--stage);aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;color:#5b6272}
+.stage img{width:100%;height:100%;object-fit:contain;display:block}
+.name{padding:12px 14px;font-weight:600;font-size:17px;text-align:center}
+.row{display:flex;gap:10px;margin-top:14px}
+.btn{flex:1;font:inherit;padding:12px 8px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);cursor:pointer;font-size:15px}
+.btn small{display:block;color:var(--muted);font-size:12px}
+.btn.dis:hover{background:var(--bad);border-color:var(--bad);color:#fff}.btn.love:hover{background:var(--good);border-color:var(--good);color:#fff}
+.btn:hover small{color:inherit}.btn.skip{flex:.6}
+.hint{color:var(--muted);font-size:13px;text-align:center;margin-top:14px}
+#bar{margin-top:14px;min-height:34px;text-align:center;font-size:14px}
+#bar button{font:inherit;font-size:13px;margin:2px 3px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+</style></head><body>
+<header><h1>Discover</h1><span class="muted" id="stats"></span><a id="nav" href="#">Review saved avatars</a></header>
+<main>
+<div class="card"><div class="stage" id="stage">Finding avatars...</div><div class="name" id="name">&nbsp;</div></div>
+<div class="row">
+<button class="btn dis" id="dis">Dislike<small>Left arrow</small></button>
+<button class="btn skip" id="skip">Skip<small>Down arrow</small></button>
+<button class="btn love" id="love">Perfect<small>Right arrow</small></button>
+</div>
+<div id="bar" role="status"></div>
+<div class="hint">Keys: left = dislike, right = perfect, down = skip, Z = undo, 1-3 = why you disliked it.<br>Perfect ones are saved to your catalog. Everything you rate teaches the AI.</div>
+</main>
+<script>
+const REASONS=__REASONS__;let STATS=__STATS__;
+const TOKEN=new URLSearchParams(location.search).get("t")||"";
+const $=id=>document.getElementById(id);
+let queue=[],current=null,last=null,exhausted=false,fetching=false,busy=false,me={liked:0,disliked:0},barTimer;
+$("nav").href="/?t="+encodeURIComponent(TOKEN);
+async function api(path,body){
+  const r=await fetch(path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:body?JSON.stringify(body):undefined});
+  if(!r.ok)throw new Error(await r.text());return r.json()}
+function bar(text,buttons,ms){
+  const b=$("bar");b.textContent=text+" ";
+  for(const [label,fn] of buttons||[]){const x=document.createElement("button");x.textContent=label;x.onclick=fn;b.appendChild(x)}
+  clearTimeout(barTimer);if(ms)barTimer=setTimeout(()=>b.textContent="",ms)}
+function showStats(){
+  const t=STATS.liked+STATS.disliked;
+  $("stats").textContent="This session: "+(me.liked+me.disliked)+" rated"+(t?" | All time: "+STATS.liked+" perfect, "+STATS.disliked+" disliked ("+Math.round(100*STATS.liked/t)+"% kept)":"")}
+async function refill(){
+  if(fetching||exhausted||queue.length>=6)return;fetching=true;let got=0;
+  try{const r=await api("/api/next?n=6");queue.push(...r.names);got=r.names.length;exhausted=r.done;if(!current)advance()}
+  catch(e){bar("Lost connection - is the Skin Searcher window still open?")}
+  fetching=false;if(!exhausted&&queue.length<6)setTimeout(refill,got?150:1200)}
+function advance(){
+  current=queue.shift()||null;render();
+  for(const n of queue.slice(0,3)){const i=new Image();i.src="/candidate/"+n+".png"}
+  if(queue.length<4)refill()}
+function render(){
+  const stage=$("stage");stage.textContent="";
+  if(current){const i=document.createElement("img");i.src="/candidate/"+current+".png";i.alt=current;stage.appendChild(i);$("name").textContent=current}
+  else{stage.textContent=exhausted?"No more new avatars from these groups.":"Finding avatars...";$("name").innerHTML="&nbsp;"}
+  showStats()}
+async function rate(action){
+  if(!current||busy)return;busy=true;const name=current;
+  try{
+    const r=await api("/api/discover-rate",{name,action});STATS=r.stats;last={name,action};
+    if(action==="like"){me.liked++;bar(r.info.saved?"Saved "+name+" to your catalog.":"Noted - but "+name+" has "+(r.info.followers==null?"an unknown number of":r.info.followers.toLocaleString())+" followers, so it wasn't saved.",[],3500)}
+    else{me.disliked++;bar("Why?",REASONS.map((x,i)=>[(i+1)+" "+x,()=>tag(i)]),6000)}
+    advance()}
+  catch(e){bar("Couldn't save - is the Skin Searcher window still open?")}
+  busy=false}
+async function tag(i){
+  if(!last||last.action!=="dislike")return;
+  try{await api("/api/discover-rate",{name:last.name,action:"reason",reason:REASONS[i]});bar("Noted: "+REASONS[i],[],1800)}catch(e){}}
+function skip(){if(current){last=null;advance()}}
+async function undo(){
+  if(!last||busy)return;busy=true;const l=last;
+  try{const r=await api("/api/discover-rate",{name:l.name,action:"undo"});STATS=r.stats;
+    if(l.action==="like")me.liked--;else me.disliked--;
+    if(current)queue.unshift(current);current=l.name;last=null;render();bar("Undone.",[],1200)}
+  catch(e){bar("Couldn't undo")}
+  busy=false}
+$("dis").onclick=()=>rate("dislike");$("love").onclick=()=>rate("like");$("skip").onclick=skip;
+document.addEventListener("keydown",e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey)return;const k=e.key.toLowerCase();
+  if(k==="arrowleft"||k==="a")rate("dislike");else if(k==="arrowright"||k==="d")rate("like");
+  else if(k==="arrowdown"||k==="s"||k===" "){e.preventDefault();skip()}
+  else if(k==="z"||k==="backspace")undo();else if(k>="1"&&k<="3")tag(Number(k)-1)});
+showStats();refill();
+</script></body></html>
+"""
+
+
+def gallery_html(review, prefix="", discover=False):
     """The page's HTML. `review` adds the Perfect/Dislike buttons (needs the review server)."""
     feedback = load_feedback()
     avatars = [{"name": path.stem, "file": prefix + "avatars/" + quote(path.name), "time": int(path.stat().st_mtime),
@@ -851,7 +1078,7 @@ def gallery_html(review, prefix=""):
 
     return (GALLERY_TEMPLATE.replace("__REASONS__", js(DISLIKE_REASONS))
             .replace("__STATS__", js(feedback_stats(feedback))).replace("__REVIEW__", "true" if review else "false")
-            .replace("__DATA__", js(avatars)))
+            .replace("__DISCOVER__", "true" if discover else "false").replace("__DATA__", js(avatars)))
 
 
 def build_gallery():
@@ -862,8 +1089,13 @@ def build_gallery():
     return len(list(OUTPUT_DIR.glob("*.png")))
 
 
-def make_review_server():
-    """A small web server on this computer only, so the page's buttons can save your ratings."""
+def discover_html():
+    return (DISCOVER_TEMPLATE.replace("__REASONS__", json.dumps(DISLIKE_REASONS))
+            .replace("__STATS__", json.dumps(feedback_stats())))
+
+
+def make_review_server(feed=None, session=None, max_followers=DEFAULT_SETTINGS["max_followers"]):
+    """A small web server on this computer only, so the pages' buttons can save your ratings."""
     token = secrets.token_urlsafe(16)
     holder = {}
 
@@ -887,10 +1119,24 @@ def make_review_server():
             if not self._host_ok():
                 return self._send(403, b"forbidden")
             path, _, query = self.path.partition("?")
-            if path == "/":
+            if path in ("/", "/discover"):
                 if f"t={token}" not in query.split("&"):
                     return self._send(403, b"open this page from the Skin Searcher menu")
-                return self._send(200, gallery_html(review=True).encode("utf-8"), "text/html; charset=utf-8")
+                if path == "/discover":
+                    if feed is None:
+                        return self._send(404, b"not found")
+                    return self._send(200, discover_html().encode("utf-8"), "text/html; charset=utf-8")
+                return self._send(200, gallery_html(review=True, discover=feed is not None).encode("utf-8"),
+                                  "text/html; charset=utf-8")
+            if path == "/api/next":
+                if feed is None or self.headers.get("X-Token") != token:
+                    return self._send(403, b"forbidden")
+                match = re.search(r"(?:^|&)n=(\d{1,2})(?:&|$)", query)
+                names, done = feed.take(int(match.group(1)) if match else 6)
+                return self._send(200, json.dumps({"names": names, "done": done}).encode(), "application/json")
+            match = re.fullmatch(r"/candidate/([A-Za-z0-9_]{1,40})\.png", path)
+            if match and feed is not None and match.group(1) in feed.shown:
+                return self._send(200, feed.shown[match.group(1)]["image"], "image/png")
             if path == "/favicon.ico":
                 return self._send(204)
             match = re.fullmatch(r"/avatars/([A-Za-z0-9_]{1,40})\.png", path)
@@ -901,17 +1147,24 @@ def make_review_server():
         def do_POST(self):
             if not self._host_ok() or self.headers.get("X-Token") != token:
                 return self._send(403, b"forbidden")
-            if self.path != "/api/rate" or "application/json" not in (self.headers.get("Content-Type") or ""):
+            if self.path not in ("/api/rate", "/api/discover-rate") or \
+                    "application/json" not in (self.headers.get("Content-Type") or ""):
                 return self._send(404, b"not found")
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 if not 0 < length < 4096:
                     raise ValueError("bad size")
                 data = json.loads(self.rfile.read(length))
-                stats = rate_avatar(data.get("name"), data.get("action"), data.get("reason"))
+                if self.path == "/api/rate":
+                    stats, info = rate_avatar(data.get("name"), data.get("action"), data.get("reason")), {}
+                else:
+                    cand = feed.shown.get(data.get("name")) if feed is not None else None
+                    if cand is None:
+                        raise ValueError("unknown avatar")
+                    stats, info = rate_candidate(cand, data.get("action"), data.get("reason"), session, max_followers)
             except (ValueError, TypeError, AttributeError) as e:
                 return self._send(400, str(e).encode())
-            self._send(200, json.dumps({"ok": True, "stats": stats}).encode(), "application/json")
+            self._send(200, json.dumps({"ok": True, "stats": stats, "info": info}).encode(), "application/json")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     holder["server"] = server
@@ -932,11 +1185,11 @@ def open_path(path):
         return False
 
 
-def show_gallery():
-    """Opens the review page in your browser and keeps it working until you press Enter."""
+def show_gallery(start="/", feed=None, session=None, max_followers=DEFAULT_SETTINGS["max_followers"]):
+    """Opens the review (or discovery) page in your browser and keeps it working until you press Enter."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        server, token = make_review_server()
+        server, token = make_review_server(feed, session, max_followers)
     except OSError:
         count = build_gallery()
         print(f"Gallery updated: {count} avatars (view only - couldn't start the review page).")
@@ -944,19 +1197,33 @@ def show_gallery():
             print(f"Open this file in your browser:\n  {GALLERY_PATH}")
         return
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{server.server_address[1]}/?t={token}"
-    print(f"{len(list(OUTPUT_DIR.glob('*.png')))} avatars. Opening the review page in your browser...")
+    url = f"http://127.0.0.1:{server.server_address[1]}{start}?t={token}"
+    if feed is not None:
+        feed.start()
+    print("Opening the page in your browser...")
     if not webbrowser.open(url):
         print(f"Couldn't open the browser automatically. Open this address yourself:\n  {url}")
-    print("\nOn the page: click an avatar to copy its username, mark great ones Perfect,")
-    print("and Dislike the bad ones so the AI learns your taste.")
+    if start == "/discover":
+        print("\nRate avatars with the arrow keys: left = dislike, right = perfect, down = skip, Z = undo.")
+        print("Perfect ones are saved to your catalog, and every rating teaches the AI.")
+    else:
+        print("\nOn the page: click an avatar to copy its username, mark great ones Perfect,")
+        print("and Dislike the bad ones so the AI learns your taste.")
     try:
         input("\nPress Enter here when you're finished (this closes the page's connection)... ")
     except (KeyboardInterrupt, EOFError):
         pass
     finally:
+        if feed is not None:
+            feed.stop.set()
         server.shutdown()
         server.server_close()
+
+
+def show_discovery(terms, session, max_followers):
+    """Discovery: rate fresh, unfiltered avatars from groups to teach the AI faster."""
+    print("Loading fresh avatars from: " + ", ".join(terms))
+    show_gallery("/discover", CandidateFeed(session, terms), session, max_followers)
 
 
 # --- Menu -------------------------------------------------------------------
@@ -1059,15 +1326,20 @@ def menu_action(choice, session, settings):
         print()
         run_usernames(make_args(settings, usernames=names), session, seen)
     elif choice == "4":
-        show_gallery()
+        show_gallery(feed=None, session=session, max_followers=settings["max_followers"])
         return False
     elif choice == "5":
-        open_folder(OUTPUT_DIR)
+        print("Discovery shows fresh avatars from Roblox groups for you to rate quickly.")
+        terms = input(f"Group search words or group IDs [{' '.join(DISCOVER_DEFAULT_TERMS)}]: ").replace(",", " ").split()
+        show_discovery(terms or DISCOVER_DEFAULT_TERMS, session, settings["max_followers"])
         return False
     elif choice == "6":
-        menu_settings(settings)
+        open_folder(OUTPUT_DIR)
         return False
     elif choice == "7":
+        menu_settings(settings)
+        return False
+    elif choice == "8":
         set_api_key()
     else:
         print("Pick a number from the menu.")
@@ -1095,9 +1367,10 @@ def menu():
         print("  2) Find avatars by keyword  (slower)")
         print("  3) Save specific usernames")
         print("  4) Review avatars in a grid  (teach it your taste)")
-        print("  5) Open the avatars folder")
-        print("  6) Settings")
-        print("  7) Change Gemini API key")
+        print("  5) Discover new avatars      (rate them fast)")
+        print("  6) Open the avatars folder")
+        print("  7) Settings")
+        print("  8) Change Gemini API key")
         print("  0) Quit")
         try:
             choice = input("\nChoose: ").strip()
@@ -1108,7 +1381,7 @@ def menu():
         except KeyboardInterrupt:
             print("\nBack to the menu.")
         except InvalidApiKey:
-            print("\nGemini rejected your API key. Choose 7 to enter a new one.")
+            print("\nGemini rejected your API key. Choose 8 to enter a new one.")
         except EOFError:
             return
 
@@ -1126,6 +1399,8 @@ def main():
     mode.add_argument("--keywords", nargs="+", help="user search terms, e.g. boy yellow red (auto-judged by Gemini)")
     mode.add_argument("--usernames", nargs="+", help="usernames you picked yourself (saved directly, no Gemini)")
     mode.add_argument("--gallery", action="store_true", help="review saved avatars in a grid: copy names, mark Perfect or Dislike")
+    mode.add_argument("--discover", nargs="*", metavar="WORD",
+                      help="rate fresh avatars from groups with the arrow keys (default words: outfits fashion)")
     parser.add_argument("--per-group", type=int, default=settings["per_group"],
                         help="new members to judge per group (default %(default)s)")
     parser.add_argument("--groups-per-term", type=int, default=settings["groups_per_term"],
@@ -1141,7 +1416,10 @@ def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if args.gallery:
-        show_gallery()
+        show_gallery(max_followers=args.max_followers)
+        return
+    if args.discover is not None:
+        show_discovery(args.discover or DISCOVER_DEFAULT_TERMS, make_session(), args.max_followers)
         return
     session = make_session()
     seen = load_seen()
@@ -1155,7 +1433,7 @@ def main():
     try:
         run_auto(args, session, seen, api_key)
     except InvalidApiKey:
-        sys.exit("Gemini rejected the API key - set a new one from the menu (option 7)")
+        sys.exit("Gemini rejected the API key - set a new one from the menu (option 8)")
 
 
 if __name__ == "__main__":

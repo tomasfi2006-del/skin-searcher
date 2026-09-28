@@ -9,7 +9,7 @@ Like what i usually do I just go on roblox search user and type random words lik
 ## Quick start
 
 Double-click **`start.bat`** (Windows) or **`start.command`** (Mac) to open the
-menu, then choose **7** to paste your free
+menu, then choose **8** to paste your free
 [Gemini API key](https://aistudio.google.com/apikey). Full walkthrough with
 screenshots-style examples, settings and troubleshooting:
 **[Skin-Searcher-Guide.pdf](Skin-Searcher-Guide.pdf)**.
@@ -25,6 +25,14 @@ Dislike removes the avatar from your catalog (with an Undo, and optional
 one-click reasons: too plain / messy random mix / not my style). Perfect marks
 the ones you love. Avatars you save by hand with option 3 count as Perfect
 automatically.
+
+**Discover** (menu option 5, or `python catalog.py --discover`) is the fastest way
+to teach it: fresh avatars from outfit/fashion groups appear one at a time and
+you rate them with the arrow keys (left = dislike, right = perfect, down = skip,
+Z = undo, 1-3 = why). Perfect ones are saved to your catalog, unless the account
+has more followers than your limit (then it only counts as a taste example).
+Because these avatars are unfiltered, it also shows what the AI would wrongly
+have thrown away.
 
 Your ratings are used on every later search: each request to the AI includes a
 few avatars you rated Perfect and a few you Disliked (picked at random from all
@@ -82,7 +90,7 @@ pip install -r requirements.txt
 
 For `--groups` and `--keywords`, get a free Gemini API key at
 https://aistudio.google.com/apikey. Either save it once from the menu
-(option 7), or set it for the session:
+(option 8), or set it for the session:
 
 ```
 export GEMINI_API_KEY=your-key-here
@@ -104,6 +112,7 @@ python catalog.py --gallery
 - `--keywords` — user search terms, same as Roblox's user search bar
 - `--usernames` — specific usernames you already picked
 - `--gallery` — review saved avatars in a grid: copy names, mark Perfect / Dislike
+- `--discover [words]` — rate fresh avatars from groups with the arrow keys
 - `--per-group` — new members to judge per group (default 300)
 - `--groups-per-term` — how many matching groups to use per search term (default 3)
 - `--per-keyword` — users to pull per keyword (default 100)
