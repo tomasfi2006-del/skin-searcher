@@ -8,6 +8,7 @@ user that gets checked is remembered so reruns only look at new people.
 """
 import argparse
 import base64
+import itertools
 import json
 import os
 import random
@@ -23,6 +24,30 @@ ROBLOX_THUMB_URL = "https://thumbnails.roblox.com/v1/users/avatar"
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
 GEMINI_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+# Both gemini-3.5-flash-lite and gemini-3.1-flash-lite cap the free tier at
+# 15 requests/min and 500/day EACH. Pace calls per-model to stay under that,
+# and alternate which model goes first per avatar so load (and quota use)
+# splits ~evenly across both instead of hammering one.
+GEMINI_MIN_INTERVAL = 4.2  # seconds between calls to the SAME model (60/15=4, +margin)
+_last_call_at = {}
+_model_order = itertools.cycle([
+    (GEMINI_MODEL, GEMINI_FALLBACK_MODEL),
+    (GEMINI_FALLBACK_MODEL, GEMINI_MODEL),
+])
+
+
+class DailyQuotaExceeded(RuntimeError):
+    pass
+
+
+def _wait_for_model_slot(model):
+    now = time.monotonic()
+    wait = GEMINI_MIN_INTERVAL - (now - _last_call_at.get(model, 0))
+    if wait > 0:
+        time.sleep(wait)
+    _last_call_at[model] = time.monotonic()
+
 
 STATE_PATH = Path("catalog/seen_users.json")
 OUTPUT_DIR = Path("catalog/avatars")
@@ -87,7 +112,8 @@ def fetch_thumbnails(user_ids, session):
     return thumbs
 
 
-def judge_avatar(image_bytes, api_key, models=(GEMINI_MODEL, GEMINI_FALLBACK_MODEL), retries_per_model=3):
+def judge_avatar(image_bytes, api_key, retries_per_model=2):
+    models = next(_model_order)  # alternates which model goes first each call
     body = {
         "contents": [{
             "parts": [
@@ -101,21 +127,30 @@ def judge_avatar(image_bytes, api_key, models=(GEMINI_MODEL, GEMINI_FALLBACK_MOD
     for model in models:
         url = GEMINI_URL_TEMPLATE.format(model=model)
         for attempt in range(retries_per_model):
+            _wait_for_model_slot(model)
             try:
-                resp = requests.post(url, params={"key": api_key}, json=body, timeout=45)
-                if resp.status_code == 503:
-                    last_error = "503 overloaded"
-                    if attempt < retries_per_model - 1:
-                        time.sleep(2 ** attempt)
-                    continue
-                resp.raise_for_status()
-                text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-                verdict = json.loads(text)
-                return bool(verdict.get("flashy")), verdict.get("reason", "")
+                resp = requests.post(url, params={"key": api_key}, json=body, timeout=30)
             except requests.Timeout:
                 last_error = "timeout"
+                continue
+
+            if resp.status_code == 429:
+                detail = resp.text.lower()
+                if "day" in detail or "daily" in detail:
+                    raise DailyQuotaExceeded(f"{model} daily quota exhausted")
+                last_error = "429 per-minute limit"
+                time.sleep(GEMINI_MIN_INTERVAL)  # our pacing should prevent this; back off once more if it slips through
+                continue
+            if resp.status_code == 503:
+                last_error = "503 overloaded"
                 if attempt < retries_per_model - 1:
                     time.sleep(2 ** attempt)
+                continue
+
+            resp.raise_for_status()
+            text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            verdict = json.loads(text)
+            return bool(verdict.get("flashy")), verdict.get("reason", "")
     raise RuntimeError(f"all Gemini models exhausted ({last_error})")
 
 
@@ -155,24 +190,30 @@ def main():
         thumbs = fetch_thumbnails([u["id"] for u in candidates], session)
 
         for user in candidates:
-            seen.add(user["id"])
             image_url = thumbs.get(user["id"])
             if not image_url:
+                seen.add(user["id"])
                 continue
             try:
                 img_resp = session.get(image_url, timeout=15)
                 img_resp.raise_for_status()
                 flashy, reason = judge_avatar(img_resp.content, api_key)
+            except DailyQuotaExceeded as e:
+                print(f"\n{e} - stopping here, resume tomorrow once quota resets.")
+                save_seen(seen)
+                print(f"\nDone. Added {added} new avatar(s) to {OUTPUT_DIR}/")
+                return
             except (requests.RequestException, KeyError, json.JSONDecodeError, RuntimeError) as e:
                 print(f"  {user['name']}: skipped ({e})")
+                seen.add(user["id"])
                 continue
 
+            seen.add(user["id"])
             if flashy:
                 out_path = OUTPUT_DIR / f"{user['name']}.png"
                 out_path.write_bytes(img_resp.content)
                 print(f"  + {user['name']} - {reason}")
                 added += 1
-            time.sleep(0.5)
 
         save_seen(seen)
 
