@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Roblox avatar catalog builder.
 
-  --keywords   search Roblox users by keyword, drop well-known accounts, and
-               have Gemini judge the rest in batches; matches are saved.
+  --groups     pull members of Roblox groups (e.g. outfit/fashion groups) and
+               have Gemini judge their avatars in batches; matches are saved.
+  --keywords   same, but finds people through Roblox user search (1 search/min).
   --usernames  save the avatars of specific users you picked yourself.
+
+Accounts with more than --max-followers followers are always skipped.
 
 Avatars are saved as catalog/avatars/<username>.png. Users that get a final
 result are remembered, so reruns only look at new people.
@@ -28,13 +31,19 @@ OUTPUT_DIR = Path("catalog/avatars")
 
 DEFAULT_MAX_FOLLOWERS = 500
 DEFAULT_PER_KEYWORD = 100
+DEFAULT_PER_GROUP = 300
+DEFAULT_GROUPS_PER_TERM = 3
 DEFAULT_BATCH_SIZE = 10
+MAX_GROUP_PAGES = 50  # stop paging a group after 5,000 members even if most were already seen
 WORKERS = 8
 
 ROBLOX_SEARCH_URL = "https://users.roblox.com/v1/users/search"
 ROBLOX_USERNAMES_URL = "https://users.roblox.com/v1/usernames/users"
 ROBLOX_FOLLOWERS_URL = "https://friends.roblox.com/v1/users/{}/followers/count"
 ROBLOX_THUMB_URL = "https://thumbnails.roblox.com/v1/users/avatar"
+ROBLOX_GROUP_URL = "https://groups.roblox.com/v1/groups/{}"
+ROBLOX_GROUP_SEARCH_URL = "https://groups.roblox.com/v1/groups/search"
+ROBLOX_GROUP_MEMBERS_URL = "https://groups.roblox.com/v1/groups/{}/users"
 
 GEMINI_MODELS = [
     os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
@@ -150,6 +159,33 @@ def search_users(session, keyword, limit):
         if not cursor:
             break
     return users[:limit]
+
+
+def find_groups(session, term):
+    """A numeric term is a group ID; anything else searches groups by keyword (best matches first)."""
+    if term.isdigit():
+        group = roblox(session, "group-info", "GET", ROBLOX_GROUP_URL.format(term)).json()
+        return [group]
+    data = roblox(session, "group-search", "GET", ROBLOX_GROUP_SEARCH_URL,
+                  params={"keyword": term, "limit": 25}).json()
+    return data.get("data", [])
+
+
+def group_member_pages(session, group_id):
+    """Yields pages of up to 100 members, newest first (more likely to be active)."""
+    cursor = None
+    while True:
+        params = {"limit": 100, "sortOrder": "Desc"}
+        if cursor:
+            params["cursor"] = cursor
+        data = roblox(session, "group-members", "GET", ROBLOX_GROUP_MEMBERS_URL.format(group_id),
+                      params=params).json()
+        yield [{"id": m["user"]["userId"], "name": m["user"]["username"],
+                "hasVerifiedBadge": m["user"].get("hasVerifiedBadge", False)}
+               for m in data.get("data", []) if "user" in m]
+        cursor = data.get("nextPageCursor")
+        if not cursor:
+            return
 
 
 def resolve_usernames(session, names):
@@ -329,22 +365,6 @@ def save_avatar(user, image):
     (OUTPUT_DIR / f"{user['name']}.png").write_bytes(image)
 
 
-def split_by_followers(session, users, max_followers, stats, seen):
-    """Drops accounts over the follower cap; returns the rest."""
-    counts = follower_counts(session, users)
-    keep = []
-    for user in users:
-        count = counts.get(user["id"])
-        if count is None:
-            stats["follower lookup failed (retried next run)"] += 1
-        elif count > max_followers:
-            stats[f"over {max_followers} followers"] += 1
-            seen.add(user["id"])
-        else:
-            keep.append(user)
-    return keep
-
-
 # --- Modes ------------------------------------------------------------------
 
 def run_usernames(args, session, seen):
@@ -376,69 +396,142 @@ def run_usernames(args, session, seen):
     print(f"\nDone. Saved {saved} avatar(s) to {OUTPUT_DIR}/")
 
 
-def run_keywords(args, session, seen):
+class AutoRun:
+    """Pipeline shared by --keywords and --groups.
+
+    Gemini judges first and followers are only checked for avatars that pass:
+    the follower API (100/min) is the tightest limit left, so it isn't spent
+    on avatars that would be rejected anyway.
+    """
+
+    def __init__(self, args, session, seen, judge):
+        self.args, self.session, self.seen, self.judge = args, session, seen, judge
+        self.stats = Counter()
+        self.handled = set()
+
+    def process(self, users, limit=None):
+        """Judges and saves up to `limit` new candidates; returns how many were new."""
+        fresh = [u for u in users if u["id"] not in self.seen and u["id"] not in self.handled]
+        self.stats["already seen"] += len(users) - len(fresh)
+        fresh = fresh[:limit]
+        self.handled.update(u["id"] for u in fresh)
+
+        candidates = []
+        for user in fresh:
+            if user.get("hasVerifiedBadge"):
+                self.stats["verified badge"] += 1
+                self.seen.add(user["id"])
+            else:
+                candidates.append(user)
+
+        images = fetch_avatar_images(self.session, [u["id"] for u in candidates])
+        ready = [u for u in candidates if u["id"] in images]
+        self.stats["no avatar render (retried next run)"] += len(candidates) - len(ready)
+
+        size = self.args.batch_size
+        for i in range(0, len(ready), size):
+            self._judge_batch(ready[i:i + size], images)
+            save_seen(self.seen)
+        return len(fresh)
+
+    def _judge_batch(self, batch, images):
+        try:
+            verdicts = self.judge.judge([images[u["id"]] for u in batch])
+        except DailyQuotaExceeded:
+            raise
+        except RuntimeError as e:
+            print(f"  batch of {len(batch)} not judged ({e}), retried next run")
+            self.stats["not judged (retried next run)"] += len(batch)
+            return
+
+        passed = []
+        for idx, user in enumerate(batch):
+            verdict = verdicts.get(idx)
+            if verdict is None:
+                self.stats["not judged (retried next run)"] += 1
+            elif verdict[0]:
+                passed.append((user, verdict[1]))
+            else:
+                self.seen.add(user["id"])
+                self.stats["judged, not a match"] += 1
+        if not passed:
+            return
+
+        counts = follower_counts(self.session, [user for user, _ in passed])
+        for user, reason in passed:
+            count = counts.get(user["id"])
+            if count is None:
+                self.stats["follower lookup failed (retried next run)"] += 1
+            elif count > self.args.max_followers:
+                self.seen.add(user["id"])
+                self.stats[f"matched but over {self.args.max_followers} followers"] += 1
+            else:
+                save_avatar(user, images[user["id"]])
+                self.seen.add(user["id"])
+                self.stats["saved"] += 1
+                print(f"  + {user['name']} - {reason}")
+
+
+def search_keywords(run):
+    keywords = list(run.args.keywords)
+    if run.args.shuffle:
+        random.shuffle(keywords)
+    for kw in keywords:
+        # Roblox's 1/min search window refills while this keyword's candidates
+        # are being judged, so the next search usually doesn't have to wait.
+        print(f"Searching '{kw}'...")
+        try:
+            users = search_users(run.session, kw, run.args.per_keyword)
+        except requests.RequestException as e:
+            print(f"  search failed: {e}")
+            continue
+        run.process(users)
+
+
+def search_groups(run):
+    done = set()
+    for term in run.args.groups:
+        try:
+            groups = find_groups(run.session, term)
+        except requests.RequestException as e:
+            print(f"Group lookup '{term}' failed: {e}")
+            continue
+        if not groups:
+            print(f"No groups found for '{term}'")
+        used = 0
+        for group in groups:
+            if used >= run.args.groups_per_term:
+                break
+            if group["id"] in done:
+                continue
+            done.add(group["id"])
+            print(f"Group '{group['name']}' ({group.get('memberCount', 0):,} members)...")
+            new, readable = 0, False
+            try:
+                # Already-checked members are skipped, so reruns page deeper into the group.
+                for page_no, page in enumerate(group_member_pages(run.session, group["id"]), 1):
+                    readable = True
+                    new += run.process(page, limit=run.args.per_group - new)
+                    if new >= run.args.per_group or page_no >= MAX_GROUP_PAGES:
+                        break
+            except requests.RequestException as e:
+                if not readable:
+                    print("  member list is hidden without logging in, trying the next group")
+                    continue
+                print(f"  member list failed partway: {e}")
+            used += 1
+
+
+def run_auto(args, session, seen):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         sys.exit("Set GEMINI_API_KEY (get a free key at https://aistudio.google.com/apikey)")
-    judge = GeminiJudge(api_key)
-
-    keywords = list(args.keywords)
-    if args.shuffle:
-        random.shuffle(keywords)
-
-    stats = Counter()
-    handled = set()
+    run = AutoRun(args, session, seen, GeminiJudge(api_key))
     try:
-        for kw in keywords:
-            # The next search waits out Roblox's 1/min window while this keyword's
-            # candidates get filtered and judged, so that time isn't wasted.
-            print(f"Searching '{kw}'...")
-            try:
-                found = search_users(session, kw, args.per_keyword)
-            except requests.RequestException as e:
-                print(f"  search failed: {e}")
-                continue
-
-            fresh = [u for u in found if u["id"] not in seen and u["id"] not in handled]
-            handled.update(u["id"] for u in fresh)
-            stats["found"] += len(found)
-            stats["already seen"] += len(found) - len(fresh)
-
-            for user in fresh:
-                if user.get("hasVerifiedBadge"):
-                    stats["verified badge"] += 1
-                    seen.add(user["id"])
-            fresh = [u for u in fresh if not u.get("hasVerifiedBadge")]
-
-            candidates = split_by_followers(session, fresh, args.max_followers, stats, seen)
-            images = fetch_avatar_images(session, [u["id"] for u in candidates])
-            ready = [u for u in candidates if u["id"] in images]
-            stats["no avatar render (retried next run)"] += len(candidates) - len(ready)
-
-            for i in range(0, len(ready), args.batch_size):
-                batch = ready[i:i + args.batch_size]
-                try:
-                    verdicts = judge.judge([images[u["id"]] for u in batch])
-                except DailyQuotaExceeded:
-                    raise
-                except RuntimeError as e:
-                    print(f"  batch of {len(batch)} not judged ({e}), retried next run")
-                    stats["not judged (retried next run)"] += len(batch)
-                    continue
-                for idx, user in enumerate(batch):
-                    verdict = verdicts.get(idx)
-                    if verdict is None:
-                        stats["not judged (retried next run)"] += 1
-                        continue
-                    seen.add(user["id"])
-                    flashy, reason = verdict
-                    if flashy:
-                        save_avatar(user, images[user["id"]])
-                        stats["saved"] += 1
-                        print(f"  + {user['name']} - {reason}")
-                    else:
-                        stats["judged, not a match"] += 1
-                save_seen(seen)
+        if args.keywords:
+            search_keywords(run)
+        else:
+            search_groups(run)
     except DailyQuotaExceeded as e:
         print(f"\n{e} - stopping here, rerun tomorrow to continue.")
     except KeyboardInterrupt:
@@ -446,8 +539,8 @@ def run_keywords(args, session, seen):
     finally:
         save_seen(seen)
 
-    print(f"\nDone. Saved {stats['saved']} new avatar(s) to {OUTPUT_DIR}/")
-    for label, count in stats.items():
+    print(f"\nDone. Saved {run.stats['saved']} new avatar(s) to {OUTPUT_DIR}/")
+    for label, count in run.stats.items():
         if label != "saved":
             print(f"  {label}: {count}")
 
@@ -455,8 +548,14 @@ def run_keywords(args, session, seen):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--keywords", nargs="+", help="search terms, e.g. boy yellow red (auto-judged by Gemini)")
+    mode.add_argument("--groups", nargs="+",
+                      help="group search terms or group IDs, e.g. outfits fashion 5215595 (auto-judged by Gemini)")
+    mode.add_argument("--keywords", nargs="+", help="user search terms, e.g. boy yellow red (auto-judged by Gemini)")
     mode.add_argument("--usernames", nargs="+", help="usernames you picked yourself (saved directly, no Gemini)")
+    parser.add_argument("--per-group", type=int, default=DEFAULT_PER_GROUP,
+                        help=f"new members to judge per group (default {DEFAULT_PER_GROUP})")
+    parser.add_argument("--groups-per-term", type=int, default=DEFAULT_GROUPS_PER_TERM,
+                        help=f"top matching groups to use per search term (default {DEFAULT_GROUPS_PER_TERM})")
     parser.add_argument("--per-keyword", type=int, default=DEFAULT_PER_KEYWORD,
                         help=f"users to pull per keyword; each 100 costs one Roblox search minute (default {DEFAULT_PER_KEYWORD})")
     parser.add_argument("--shuffle", action="store_true", help="randomize keyword order")
@@ -472,7 +571,7 @@ def main():
     if args.usernames:
         run_usernames(args, session, seen)
     else:
-        run_keywords(args, session, seen)
+        run_auto(args, session, seen)
 
 
 if __name__ == "__main__":
