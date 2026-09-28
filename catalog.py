@@ -21,10 +21,8 @@ ROBLOX_SEARCH_URL = "https://users.roblox.com/v1/users/search"
 ROBLOX_THUMB_URL = "https://thumbnails.roblox.com/v1/users/avatar"
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_MODEL}:generateContent"
-)
+GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
+GEMINI_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 STATE_PATH = Path("catalog/seen_users.json")
 OUTPUT_DIR = Path("catalog/avatars")
@@ -49,10 +47,14 @@ def save_seen(seen):
     STATE_PATH.write_text(json.dumps(sorted(seen)))
 
 
+ROBLOX_SEARCH_PAGE_SIZES = (10, 25, 50, 100)
+
+
 def search_users(keyword, limit, session):
+    page_size = next((p for p in ROBLOX_SEARCH_PAGE_SIZES if p >= limit), 100)
     users, cursor = [], ""
     while len(users) < limit:
-        params = {"keyword": keyword, "limit": min(100, limit)}
+        params = {"keyword": keyword, "limit": page_size}
         if cursor:
             params["cursor"] = cursor
         resp = session.get(ROBLOX_SEARCH_URL, params=params, timeout=15)
@@ -85,7 +87,7 @@ def fetch_thumbnails(user_ids, session):
     return thumbs
 
 
-def judge_avatar(image_bytes, api_key):
+def judge_avatar(image_bytes, api_key, models=(GEMINI_MODEL, GEMINI_FALLBACK_MODEL), retries_per_model=3):
     body = {
         "contents": [{
             "parts": [
@@ -95,11 +97,26 @@ def judge_avatar(image_bytes, api_key):
         }],
         "generationConfig": {"responseMimeType": "application/json"},
     }
-    resp = requests.post(GEMINI_URL, params={"key": api_key}, json=body, timeout=30)
-    resp.raise_for_status()
-    text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-    verdict = json.loads(text)
-    return bool(verdict.get("flashy")), verdict.get("reason", "")
+    last_error = None
+    for model in models:
+        url = GEMINI_URL_TEMPLATE.format(model=model)
+        for attempt in range(retries_per_model):
+            try:
+                resp = requests.post(url, params={"key": api_key}, json=body, timeout=45)
+                if resp.status_code == 503:
+                    last_error = "503 overloaded"
+                    if attempt < retries_per_model - 1:
+                        time.sleep(2 ** attempt)
+                    continue
+                resp.raise_for_status()
+                text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                verdict = json.loads(text)
+                return bool(verdict.get("flashy")), verdict.get("reason", "")
+            except requests.Timeout:
+                last_error = "timeout"
+                if attempt < retries_per_model - 1:
+                    time.sleep(2 ** attempt)
+    raise RuntimeError(f"all Gemini models exhausted ({last_error})")
 
 
 def main():
@@ -146,7 +163,7 @@ def main():
                 img_resp = session.get(image_url, timeout=15)
                 img_resp.raise_for_status()
                 flashy, reason = judge_avatar(img_resp.content, api_key)
-            except (requests.RequestException, KeyError, json.JSONDecodeError) as e:
+            except (requests.RequestException, KeyError, json.JSONDecodeError, RuntimeError) as e:
                 print(f"  {user['name']}: skipped ({e})")
                 continue
 
