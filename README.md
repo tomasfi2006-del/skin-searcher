@@ -43,7 +43,8 @@ python catalog.py --keywords boy yellow red cool --per-keyword 25
 Run it again anytime with the same or new keywords to add more avatars to the
 catalog — already-checked users are skipped automatically.
 
-If Gemini requests start failing, the model name may have changed since this
-was written — check https://aistudio.google.com/ for the current free
-vision-capable model and set `GEMINI_MODEL` to override the default
-(`gemini-2.0-flash-lite`).
+Defaults to `gemini-3.5-flash-lite` (500 free requests/day, well above the
+other Flash tiers). If Gemini requests start failing, the model name may
+have changed since this was written — check https://aistudio.google.com/
+for the current free vision-capable model and set `GEMINI_MODEL` to
+override the default.

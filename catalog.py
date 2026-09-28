@@ -20,7 +20,7 @@ import requests
 ROBLOX_SEARCH_URL = "https://users.roblox.com/v1/users/search"
 ROBLOX_THUMB_URL = "https://thumbnails.roblox.com/v1/users/avatar"
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-lite")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent"
