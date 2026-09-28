@@ -43,9 +43,12 @@ python catalog.py --keywords boy yellow red cool --per-keyword 25
 Run it again anytime with the same or new keywords to add more avatars to the
 catalog — already-checked users are skipped automatically.
 
-Defaults to `gemini-3.5-flash-lite` (500 free requests/day, well above the
-other Flash tiers). It's a popular free model, so it sometimes returns
-"high demand" errors — the script retries automatically, and after a few
-failed retries falls back to `gemini-3.1-flash-lite` for that avatar.
-Override either with `GEMINI_MODEL` / `GEMINI_FALLBACK_MODEL` if a model
-name ever changes.
+Uses `gemini-3.5-flash-lite` and `gemini-3.1-flash-lite`, alternating between
+them for every avatar. Each is capped on the free tier at 15 requests/min and
+500/day, so alternating roughly doubles real throughput (~26-28 avatars/min)
+instead of hammering one model. The script paces its own calls to stay under
+each model's per-minute cap, retries on transient "high demand" errors, and
+if a model's *daily* cap is hit it stops the whole run cleanly (saving
+progress) rather than erroring out avatar by avatar — just rerun tomorrow.
+Override either model with `GEMINI_MODEL` / `GEMINI_FALLBACK_MODEL` if a
+model name ever changes.
