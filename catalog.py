@@ -21,6 +21,9 @@ import requests
 ROBLOX_SEARCH_URL = "https://users.roblox.com/v1/users/search"
 ROBLOX_USERNAMES_URL = "https://users.roblox.com/v1/usernames/users"
 ROBLOX_THUMB_URL = "https://thumbnails.roblox.com/v1/users/avatar"
+ROBLOX_FOLLOWERS_URL = "https://friends.roblox.com/v1/users/{user_id}/followers/count"
+
+DEFAULT_MAX_FOLLOWERS = 5000  # skip well-known/high-follower accounts
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
@@ -54,10 +57,22 @@ STATE_PATH = Path("catalog/seen_users.json")
 OUTPUT_DIR = Path("catalog/avatars")
 
 JUDGE_PROMPT = """You are helping a Roblox content creator pick avatars to \
-feature in recordings. Look at this Roblox avatar render and judge if it \
-looks FLASHY, VIBRANT, and COOL - eye-catching for a video thumbnail or \
-clip (bold/saturated colors, striking outfit or accessories, stands out \
-visually). Boring, plain, default, or dull-colored avatars do NOT count.
+feature in recordings by literally copying the look onto themselves. Look \
+at this Roblox avatar render and judge if it passes ALL of these:
+
+1. Has a clear, intentional character concept - not a random mismatch of \
+default Roblox part colors.
+2. Built around one standout hat/headpiece or signature accessory that \
+catches the eye - not a bare head with no distinguishing piece.
+3. Uses a deliberate, bold color story: either strong saturated color \
+blocking, OR a striking monochrome/high-contrast palette (all black, all \
+red, black + one bold accent color, etc). Plain, dull, washed-out, or \
+default-Roblox-tone colors do NOT count.
+4. Clean silhouette - NOT visually cluttered or overloaded with too many \
+stacked accessories/items at once.
+
+Costumes/characters (Sonic, superheroes, Santa, anime references, etc) are \
+totally fine and often good - do not penalize for that.
 
 Reply with ONLY compact JSON: {"flashy": true or false, "reason": "one short phrase"}"""
 
@@ -113,6 +128,16 @@ def resolve_usernames(usernames, session):
         found.extend(data)
         time.sleep(0.3)
     return found
+
+
+def get_follower_count(user_id, session):
+    """Returns follower count, or None if the lookup fails (fail-open)."""
+    try:
+        resp = session.get(ROBLOX_FOLLOWERS_URL.format(user_id=user_id), timeout=10)
+        resp.raise_for_status()
+        return resp.json()["count"]
+    except (requests.RequestException, KeyError, ValueError):
+        return None
 
 
 def fetch_thumbnails(user_ids, session):
@@ -183,6 +208,8 @@ def main():
     mode.add_argument("--usernames", nargs="+", help="Specific usernames you already picked (saved directly, no Gemini)")
     parser.add_argument("--per-keyword", type=int, default=25, help="How many users to pull per keyword (--keywords mode)")
     parser.add_argument("--shuffle", action="store_true", help="Randomize keyword order (--keywords mode)")
+    parser.add_argument("--max-followers", type=int, default=DEFAULT_MAX_FOLLOWERS,
+                         help=f"Skip accounts with more followers than this - avoid copying a well-known player's look (default {DEFAULT_MAX_FOLLOWERS})")
     args = parser.parse_args()
 
     session = requests.Session()
@@ -208,7 +235,11 @@ def main():
             seen.add(user["id"])
             out_path = OUTPUT_DIR / f"{user['name']}.png"
             out_path.write_bytes(img_resp.content)
-            print(f"  + {user['name']}")
+            followers = get_follower_count(user["id"], session)
+            if followers is not None and followers > args.max_followers:
+                print(f"  + {user['name']} (heads up: {followers:,} followers - fairly well-known)")
+            else:
+                print(f"  + {user['name']}")
             added += 1
         save_seen(seen)
         print(f"\nDone. Added {added} new avatar(s) to {OUTPUT_DIR}/")
@@ -242,6 +273,13 @@ def main():
             if not image_url:
                 seen.add(user["id"])
                 continue
+
+            followers = get_follower_count(user["id"], session)
+            if followers is not None and followers > args.max_followers:
+                print(f"  {user['name']}: skipped ({followers:,} followers, too well-known)")
+                seen.add(user["id"])
+                continue
+
             try:
                 img_resp = session.get(image_url, timeout=15)
                 img_resp.raise_for_status()
