@@ -44,7 +44,8 @@ Run it again anytime with the same or new keywords to add more avatars to the
 catalog — already-checked users are skipped automatically.
 
 Defaults to `gemini-3.5-flash-lite` (500 free requests/day, well above the
-other Flash tiers). If Gemini requests start failing, the model name may
-have changed since this was written — check https://aistudio.google.com/
-for the current free vision-capable model and set `GEMINI_MODEL` to
-override the default.
+other Flash tiers). It's a popular free model, so it sometimes returns
+"high demand" errors — the script retries automatically, and after a few
+failed retries falls back to `gemini-3.1-flash-lite` for that avatar.
+Override either with `GEMINI_MODEL` / `GEMINI_FALLBACK_MODEL` if a model
+name ever changes.
