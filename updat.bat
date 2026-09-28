@@ -11,7 +11,7 @@ if /i "%~1"=="--from-temp" (
 set "REPO=%~dp0"
 
 :: O cmd le um .bat aos bocados enquanto o corre, e a atualizacao pode reescrever este
-:: proprio ficheiro (quando o update.bat muda no main). Por isso corre de uma copia em %TEMP%.
+:: proprio ficheiro (quando o updat.bat muda no main). Por isso corre de uma copia em %TEMP%.
 copy /y "%~f0" "%TEMP%\skinsearcher-update.bat" >nul 2>nul && "%TEMP%\skinsearcher-update.bat" --from-temp "%~dp0"
 :: So chega aqui se a copia falhar: continua a partir deste ficheiro.
 
@@ -48,7 +48,7 @@ git status --short --untracked-files=no
 echo.
 choice /c GC /n /m "[G] Guardar de lado e continuar   [C] Cancelar: "
 if errorlevel 2 goto :cancel
-git stash push -m "update.bat %STAMP% (branch %BRANCH%)"
+git stash push -m "updat.bat %STAMP% (branch %BRANCH%)"
 if errorlevel 1 goto :fail
 set "STASHED=1"
 echo [OK] Guardadas no stash.
