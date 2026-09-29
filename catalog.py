@@ -17,6 +17,7 @@ result are remembered, so reruns only look at new people.
 """
 import argparse
 import base64
+import colorsys
 import getpass
 import io
 import json
@@ -107,6 +108,8 @@ THIS CREATOR'S TASTE PROFILE - learned from {liked} avatars they marked \
 Perfect and {disliked} they disliked. It overrides the general guide \
 wherever they disagree:
 {profile}
+This creator loves several different styles. Do not favor one look (for example dark, or bright) \
+over another: judge how distinctive and deliberate each avatar is within its own style.
 """
 
 PROFILE_PROMPT = """A Roblox content creator rated {total} random Roblox avatars to \
@@ -114,10 +117,15 @@ teach you their taste in avatars to copy for their videos. Only {pct}% were \
 marked PERFECT; the rest were DISLIKED. Below are contact sheets of avatars: \
 first some they marked PERFECT, then a random sample of the ones they \
 DISLIKED.{reasons}
-
+{facts}
 Write this creator's TASTE PROFILE for another AI that will score new \
-avatars from pictures. Plain text, at most 300 words, in these sections:
-LOVES: 5-8 concrete, visible traits shared by the PERFECT avatars.
+avatars from pictures. Plain text, at most 350 words, in these sections:
+STYLES THEY LOVE: name the 3-5 distinct style families you can see among the \
+PERFECT avatars (use whatever really appears - for example dark or goth, \
+bright and colorful, cute or pastel, costume or character, quirky or meme), \
+each with roughly what share of the Perfects it covers and its concrete \
+visible traits. Cover ALL the families, including small ones: a minority \
+style is still their taste.
 REJECTS: 5-8 concrete, visible traits of the DISLIKED ones. Describe the most \
 common rejected looks specifically (for example Roblox's default starter \
 avatars, plain shirt-and-pants outfits) so they can be recognised.
@@ -125,7 +133,9 @@ TIE-BREAKERS: how to decide close calls between a Perfect and a Disliked look.
 CALIBRATION: a Perfect is rare (about {pct}%), so most avatars should score low.
 
 Be specific and visual. Only describe what you can actually see in the \
-sheets, do not invent traits, and do not mention usernames."""
+sheets, do not invent traits, and do not mention usernames. Do not treat a \
+color palette as the reason for a rating unless it really separates the two \
+piles - work out what else makes the PERFECT ones different."""
 
 VERDICT_SCHEMA = {
     "type": "ARRAY",
@@ -421,7 +431,9 @@ class GeminiJudge:
         why = ""
         if reasons:
             why = " Reasons they gave for dislikes: " + ", ".join(f"{r} ({n}x)" for r, n in reasons) + "."
-        parts = [{"text": PROFILE_PROMPT.replace("{total}", str(total)).replace("{pct}", str(pct)).replace("{reasons}", why)}]
+        facts = style_facts(liked_images, disliked_images) if liked_images and disliked_images else ""
+        parts = [{"text": PROFILE_PROMPT.replace("{total}", str(total)).replace("{pct}", str(pct))
+                  .replace("{reasons}", why).replace("{facts}", facts)}]
         for label, images in (("PERFECT", liked_images), ("DISLIKED", disliked_images)):
             sheets = [images[i:i + SHEET_SIZE] for i in range(0, len(images), SHEET_SIZE)]
             for n, group in enumerate(sheets, 1):
@@ -732,6 +744,31 @@ class KnownLooks:
         if near > LOOKALIKE_DISTANCE:
             return False
         return min([bin(h ^ l).count("1") for l in self.liked] + [99]) > near  # closer to a Perfect? keep it
+
+
+def avatar_traits(png):
+    """(mostly dark, vividly colorful) for one avatar picture, from its pixels."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(png)).convert("RGBA").resize((96, 96))
+    px = list(img.get_flattened_data() if hasattr(img, "get_flattened_data") else img.getdata())
+    px = [p for p in px if p[3] > 200]
+    if not px:
+        return False, False
+    dark = sum((0.299 * r + 0.587 * g + 0.114 * b) < 60 for r, g, b, _ in px) / len(px)
+    vivid = sum(1 for r, g, b, _ in px if colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)[1] > .5
+                and colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)[2] > .35) / len(px)
+    return dark > .45, vivid > .22
+
+
+def style_facts(liked_images, disliked_images):
+    """Measured facts about the two piles, so the AI doesn't mistake a color palette for the reason behind a rating."""
+    def shares(images):
+        traits = [avatar_traits(i) for i in images]
+        return (round(100 * sum(t[0] for t in traits) / len(traits)),
+                round(100 * sum(t[1] for t in traits) / len(traits)))
+    (ld, lv), (dd, dv) = shares(liked_images), shares(disliked_images)
+    return (f"\nMeasured on these ratings: {ld}% of the PERFECT avatars are mostly dark-toned, and so are {dd}% of the "
+            f"DISLIKED ones; {lv}% of the PERFECT avatars are vividly colorful, against {dv}% of the DISLIKED ones.\n")
 
 
 def load_profile():
