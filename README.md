@@ -9,7 +9,7 @@ Like what i usually do I just go on roblox search user and type random words lik
 ## Quick start
 
 Double-click **`start.bat`** (Windows) or **`start.command`** (Mac) to open the
-menu, then choose **8** to paste your free
+menu, then choose **9** to paste your free
 [Gemini API key](https://aistudio.google.com/apikey). Full walkthrough with
 screenshots-style examples, settings and troubleshooting:
 **[Skin-Searcher-Guide.pdf](Skin-Searcher-Guide.pdf)**.
@@ -34,12 +34,26 @@ has more followers than your limit (then it only counts as a taste example).
 Because these avatars are unfiltered, it also shows what the AI would wrongly
 have thrown away.
 
-Your ratings are used on every later search: each request to the AI includes a
-few avatars you rated Perfect and a few you Disliked (picked at random from all
-your ratings), plus your most common reasons for rejecting. So the more you
-rate, the closer it gets to your taste. The menu shows your ratings and the
-"% kept" so you can watch it improve. The review page runs only on your own
-computer and stops when you press Enter in the menu window.
+### How your ratings improve the AI
+
+Three things happen automatically:
+
+1. **Taste profile.** Once you have at least 8 Perfect and 8 Disliked ratings, the
+   AI studies them (menu option **6**, or automatically at the start of a search
+   after 25 new ratings) and writes a short description of your taste: what you
+   love, what you reject, how to decide close calls. It is saved in
+   `catalog/taste_profile.txt` - you can read it and edit it. Every search then
+   uses that text, so it adds no extra cost per avatar.
+2. **Scores.** The AI gives each avatar a 1-10 match score and only saves the ones
+   at or above your cutoff (Settings, default 8; `--min-score` on the command line).
+   Raise it to get fewer, better avatars.
+3. **Look-alike filter.** Avatars that look almost identical to ones you already
+   disliked (mostly Roblox's default starter avatars) are skipped before the AI is
+   even asked - in searches and in Discover.
+
+The menu shows your ratings, your "% kept", and whether the taste profile is up to
+date. The review and Discover pages run only on your own computer and stop when you
+press Enter in the menu window.
 
 Your key, settings and avatars live in the `catalog/` folder, which is never
 uploaded to GitHub.
@@ -90,7 +104,7 @@ pip install -r requirements.txt
 
 For `--groups` and `--keywords`, get a free Gemini API key at
 https://aistudio.google.com/apikey. Either save it once from the menu
-(option 8), or set it for the session:
+(option 9), or set it for the session:
 
 ```
 export GEMINI_API_KEY=your-key-here
@@ -117,6 +131,7 @@ python catalog.py --gallery
 - `--groups-per-term` — how many matching groups to use per search term (default 3)
 - `--per-keyword` — users to pull per keyword (default 100)
 - `--max-followers` — skip accounts with more followers than this (default 500)
+- `--min-score` — AI match score (1-10) an avatar needs to be saved (default 8)
 - `--batch-size` — avatars sent to Gemini per request (default 10)
 - `--shuffle` — randomize keyword order
 

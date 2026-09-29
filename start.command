@@ -5,5 +5,5 @@ if ! command -v python3 >/dev/null; then
   read -r -p "Press Enter to close..."
   exit 1
 fi
-python3 -c "import requests" 2>/dev/null || python3 -m pip install -r requirements.txt
+python3 -c "import requests, PIL" 2>/dev/null || python3 -m pip install -r requirements.txt
 python3 catalog.py
