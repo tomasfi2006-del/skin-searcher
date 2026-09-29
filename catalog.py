@@ -17,7 +17,6 @@ result are remembered, so reruns only look at new people.
 """
 import argparse
 import base64
-import colorsys
 import getpass
 import io
 import json
@@ -47,13 +46,12 @@ OUTPUT_DIR = CATALOG_DIR / "avatars"
 SETTINGS_PATH = CATALOG_DIR / "settings.json"
 KEY_PATH = CATALOG_DIR / "gemini_key.txt"
 FEEDBACK_PATH = CATALOG_DIR / "feedback.json"
-FEEDBACK_DIR = CATALOG_DIR / "feedback"  # liked/ and disliked/ copies used as examples for the AI
-PROFILE_PATH = CATALOG_DIR / "taste_profile.txt"  # plain text: you can read and edit it
-PROFILE_META_PATH = CATALOG_DIR / "taste_profile.json"
-SHEET_SIZE = 24  # avatars per contact sheet when writing the taste profile
-PROFILE_MAX_LIKED, PROFILE_MAX_DISLIKED = 72, 144  # rated avatars the AI looks at when writing it
-PROFILE_MIN_EACH = 8  # Perfect and Disliked ratings needed before a profile is worth making
-PROFILE_REFRESH_AFTER = 25  # new ratings before the profile is rebuilt automatically
+FEEDBACK_DIR = CATALOG_DIR / "feedback"  # copies of the avatars you rated (liked/ and disliked/)
+EMBED_PATH = CATALOG_DIR / "taste_embeddings.npz"  # cached fingerprints of your rated avatars
+EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent"
+EMBED_DIMS = 768  # tested: as accurate as the full 3072 numbers, 4x smaller
+EMBED_WORKERS = 6
+TASTE_MIN_PERFECT, TASTE_MIN_DISLIKED = 15, 50  # ratings needed before the taste model is trained
 DISLIKE_REASONS = ["Too plain", "Messy / random mix", "Not my style"]
 NAME_RE = re.compile(r"[A-Za-z0-9_]{1,40}")  # Roblox usernames
 
@@ -65,6 +63,7 @@ DEFAULT_SETTINGS = {
     "per_keyword": 100,
     "batch_size": 10,
     "min_score": 8,
+    "taste_keep": 90,
 }
 MAX_GROUP_PAGES = 50  # stop paging a group after 5,000 members even if most were already seen
 WORKERS = 8
@@ -100,42 +99,8 @@ or a striking monochrome/high-contrast look); or a funny, quirky touch. It \
 scores low when it looks plain or default (basic shirt and pants, default \
 skin tones and colors, nothing interesting) or is piled with so many \
 accessories that the character is hard to read.
-{taste}
+
 Return one entry per avatar: its number, the score, and a short reason."""
-
-TASTE_BLOCK = """
-THIS CREATOR'S TASTE PROFILE - learned from {liked} avatars they marked \
-Perfect and {disliked} they disliked. It overrides the general guide \
-wherever they disagree:
-{profile}
-This creator loves several different styles. Do not favor one look (for example dark, or bright) \
-over another: judge how distinctive and deliberate each avatar is within its own style.
-"""
-
-PROFILE_PROMPT = """A Roblox content creator rated {total} random Roblox avatars to \
-teach you their taste in avatars to copy for their videos. Only {pct}% were \
-marked PERFECT; the rest were DISLIKED. Below are contact sheets of avatars: \
-first some they marked PERFECT, then a random sample of the ones they \
-DISLIKED.{reasons}
-{facts}
-Write this creator's TASTE PROFILE for another AI that will score new \
-avatars from pictures. Plain text, at most 350 words, in these sections:
-STYLES THEY LOVE: name the 3-5 distinct style families you can see among the \
-PERFECT avatars (use whatever really appears - for example dark or goth, \
-bright and colorful, cute or pastel, costume or character, quirky or meme), \
-each with roughly what share of the Perfects it covers and its concrete \
-visible traits. Cover ALL the families, including small ones: a minority \
-style is still their taste.
-REJECTS: 5-8 concrete, visible traits of the DISLIKED ones. Describe the most \
-common rejected looks specifically (for example Roblox's default starter \
-avatars, plain shirt-and-pants outfits) so they can be recognised.
-TIE-BREAKERS: how to decide close calls between a Perfect and a Disliked look.
-CALIBRATION: a Perfect is rare (about {pct}%), so most avatars should score low.
-
-Be specific and visual. Only describe what you can actually see in the \
-sheets, do not invent traits, and do not mention usernames. Do not treat a \
-color palette as the reason for a rating unless it really separates the two \
-piles - work out what else makes the PERFECT ones different."""
 
 VERDICT_SCHEMA = {
     "type": "ARRAY",
@@ -341,11 +306,10 @@ def _quota_info(resp):
 
 
 class GeminiJudge:
-    """Talks to Gemini: scores avatars in batches (quotas count requests, not images) and writes the taste profile."""
+    """Scores avatars with Gemini in batches (quotas count requests, not images), rotating models."""
 
-    def __init__(self, api_key, profile=None):
+    def __init__(self, api_key):
         self.headers = {"x-goog-api-key": api_key}  # header, not URL, so errors never print the key
-        self.profile = profile  # {"text": ..., "liked": n, "disliked": n} or None
         self.models = list(GEMINI_MODELS)
         self.turn = 0
         self.last_call = {}
@@ -405,11 +369,7 @@ class GeminiJudge:
 
     def judge(self, images):
         """Returns {index: (score 1-10, reason)}; indexes missing from the reply are left out."""
-        taste = ""
-        if self.profile:
-            taste = (TASTE_BLOCK.replace("{liked}", str(self.profile["liked"]))
-                     .replace("{disliked}", str(self.profile["disliked"])).replace("{profile}", self.profile["text"]))
-        parts = [{"text": JUDGE_PROMPT.replace("{n}", str(len(images))).replace("{taste}", taste)}]
+        parts = [{"text": JUDGE_PROMPT.replace("{n}", str(len(images)))}]
         for i, img in enumerate(images, 1):
             parts.append({"text": f"Avatar {i}:"})
             parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(img).decode()}})
@@ -423,27 +383,6 @@ class GeminiJudge:
             except (ValueError, AttributeError, TypeError):
                 continue  # the reply wasn't valid JSON: ask once more
         raise RuntimeError("unreadable reply")
-
-    def write_profile(self, liked_images, disliked_images, total_liked, total_disliked, reasons):
-        """Asks Gemini to describe the creator's taste from contact sheets of their rated avatars."""
-        total = total_liked + total_disliked
-        pct = max(1, round(100 * total_liked / total))
-        why = ""
-        if reasons:
-            why = " Reasons they gave for dislikes: " + ", ".join(f"{r} ({n}x)" for r, n in reasons) + "."
-        facts = style_facts(liked_images, disliked_images) if liked_images and disliked_images else ""
-        parts = [{"text": PROFILE_PROMPT.replace("{total}", str(total)).replace("{pct}", str(pct))
-                  .replace("{reasons}", why).replace("{facts}", facts)}]
-        for label, images in (("PERFECT", liked_images), ("DISLIKED", disliked_images)):
-            sheets = [images[i:i + SHEET_SIZE] for i in range(0, len(images), SHEET_SIZE)]
-            for n, group in enumerate(sheets, 1):
-                parts.append({"text": f"{label} avatars, sheet {n} of {len(sheets)}:"})
-                parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(contact_sheet(group)).decode()}})
-        text = self._ask(parts, timeout=120).strip()
-        if len(text) < 80:
-            raise RuntimeError("the profile came back empty")
-        return text
-
 
 # --- State ------------------------------------------------------------------
 
@@ -665,19 +604,6 @@ def dislike_reason_counts():
     return counts.most_common()
 
 
-def contact_sheet(images, cols=6, cell=190):
-    """Many avatars in one picture, so the AI can look at lots of them cheaply."""
-    from PIL import Image  # Pillow: only needed for this and the look-alike filter
-    rows = -(-len(images) // cols)
-    sheet = Image.new("RGB", (cols * cell, rows * cell), "white")
-    for i, data in enumerate(images):
-        img = Image.open(io.BytesIO(data)).convert("RGBA").resize((cell, cell), Image.LANCZOS)
-        sheet.paste(img, ((i % cols) * cell, (i // cols) * cell), img)
-    out = io.BytesIO()
-    sheet.save(out, "PNG")
-    return out.getvalue()
-
-
 LOOKALIKE_DISTANCE = 4  # how similar (out of 144 bits) counts as "the same look"; tested to lose ~2% of Perfects
 LOOKALIKE_MIN_DISLIKES = 20  # don't trust the filter until there are this many dislikes
 LOOKS_CACHE_PATH = CATALOG_DIR / "looks.json"
@@ -746,80 +672,6 @@ class KnownLooks:
         return min([bin(h ^ l).count("1") for l in self.liked] + [99]) > near  # closer to a Perfect? keep it
 
 
-def avatar_traits(png):
-    """(mostly dark, vividly colorful) for one avatar picture, from its pixels."""
-    from PIL import Image
-    img = Image.open(io.BytesIO(png)).convert("RGBA").resize((96, 96))
-    px = list(img.get_flattened_data() if hasattr(img, "get_flattened_data") else img.getdata())
-    px = [p for p in px if p[3] > 200]
-    if not px:
-        return False, False
-    dark = sum((0.299 * r + 0.587 * g + 0.114 * b) < 60 for r, g, b, _ in px) / len(px)
-    vivid = sum(1 for r, g, b, _ in px if colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)[1] > .5
-                and colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)[2] > .35) / len(px)
-    return dark > .45, vivid > .22
-
-
-def style_facts(liked_images, disliked_images):
-    """Measured facts about the two piles, so the AI doesn't mistake a color palette for the reason behind a rating."""
-    def shares(images):
-        traits = [avatar_traits(i) for i in images]
-        return (round(100 * sum(t[0] for t in traits) / len(traits)),
-                round(100 * sum(t[1] for t in traits) / len(traits)))
-    (ld, lv), (dd, dv) = shares(liked_images), shares(disliked_images)
-    return (f"\nMeasured on these ratings: {ld}% of the PERFECT avatars are mostly dark-toned, and so are {dd}% of the "
-            f"DISLIKED ones; {lv}% of the PERFECT avatars are vividly colorful, against {dv}% of the DISLIKED ones.\n")
-
-
-def load_profile():
-    """The saved taste profile as {'text', 'liked', 'disliked'}, or None."""
-    try:
-        text = PROFILE_PATH.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not text:
-        return None
-    try:
-        meta = json.loads(PROFILE_META_PATH.read_text())
-    except (OSError, ValueError):
-        meta = {}
-    return {"text": text, "liked": int(meta.get("liked", 0)), "disliked": int(meta.get("disliked", 0))}
-
-
-def profile_status():
-    """(enough ratings to make a profile, the profile is missing or out of date)."""
-    stats = feedback_stats()
-    enough = min(stats["liked"], stats["disliked"]) >= PROFILE_MIN_EACH
-    profile = load_profile()
-    made_from = (profile["liked"] + profile["disliked"]) if profile else 0
-    stale = profile is None or (stats["liked"] + stats["disliked"]) - made_from >= PROFILE_REFRESH_AFTER
-    return enough, stale
-
-
-def update_taste_profile(judge):
-    """Has Gemini study your ratings and writes catalog/taste_profile.txt. Returns the profile."""
-    feedback = load_feedback()
-    stats = feedback_stats(feedback)
-    if min(stats["liked"], stats["disliked"]) < PROFILE_MIN_EACH:
-        raise ValueError(f"Rate at least {PROFILE_MIN_EACH} avatars Perfect and {PROFILE_MIN_EACH} Disliked first "
-                         f"(you have {stats['liked']} and {stats['disliked']}).")
-
-    def sample(verdict, limit):
-        names = [n for n, v in feedback.items() if v.get("verdict") == verdict
-                 and (FEEDBACK_DIR / verdict / f"{n}.png").is_file()]
-        random.shuffle(names)
-        return [(FEEDBACK_DIR / verdict / f"{n}.png").read_bytes() for n in names[:limit]]
-
-    text = judge.write_profile(sample("liked", PROFILE_MAX_LIKED), sample("disliked", PROFILE_MAX_DISLIKED),
-                               stats["liked"], stats["disliked"], dislike_reason_counts())
-    CATALOG_DIR.mkdir(parents=True, exist_ok=True)
-    if PROFILE_PATH.exists():
-        shutil.copyfile(PROFILE_PATH, PROFILE_PATH.with_name("taste_profile.previous.txt"))
-    PROFILE_PATH.write_text(text + "\n", encoding="utf-8")
-    PROFILE_META_PATH.write_text(json.dumps({**stats, "time": int(time.time())}))
-    return {"text": text, **stats}
-
-
 def load_settings():
     settings = dict(DEFAULT_SETTINGS)
     try:
@@ -853,6 +705,126 @@ def api_key_works(key):
         return resp.ok
     except requests.RequestException:
         return False
+
+
+# --- Taste model --------------------------------------------------------------
+# Each rated avatar becomes a 768-number fingerprint (Google's embedding model) and a small classifier learns which
+# fingerprints you rate Perfect. Tested on held-out ratings it ranks avatars better and far more consistently than the
+# AI's score alone, and the two together are better still. The training runs on your computer.
+
+def embed_image(png, api_key):
+    """A fingerprint of how an avatar looks, or None if it couldn't be made right now."""
+    body = {"content": {"parts": [{"inline_data": {"mime_type": "image/png", "data": base64.b64encode(png).decode()}}]},
+            "outputDimensionality": EMBED_DIMS}
+    for attempt in range(5):
+        try:
+            resp = requests.post(EMBED_URL, headers={"x-goog-api-key": api_key}, json=body, timeout=60)
+        except requests.RequestException:
+            time.sleep(2 * (attempt + 1))
+            continue
+        if resp.ok:
+            try:
+                return resp.json()["embedding"]["values"]
+            except (KeyError, ValueError):
+                return None
+        if resp.status_code in (401, 403) or "API_KEY_INVALID" in resp.text:
+            raise InvalidApiKey("Gemini rejected the API key")
+        if resp.status_code == 429 or resp.status_code >= 500:
+            time.sleep(2 * (attempt + 1))
+            continue
+        return None
+    return None
+
+
+def _fit(np, X, y, lam=1.0):
+    """Class-balanced ridge classifier in dual form (numpy only). Returns the weight vector."""
+    t = np.where(y == 1, 1.0, -1.0)
+    w = np.where(t > 0, 0.5 / (t > 0).sum(), 0.5 / (t < 0).sum()) * len(t)
+    alpha = np.linalg.solve(X @ X.T + lam * np.diag(1 / w), t)
+    return X.T @ alpha
+
+
+class TasteModel:
+    """Learns your taste from your Perfect and Disliked ratings and says yes or no to a new avatar."""
+
+    def __init__(self, api_key, keep=90):
+        self.api_key = api_key
+        self.keep = min(max(int(keep), 50), 99)  # percent of your Perfects the model must not reject
+        self.beta = self.bar = None
+        self.info = {}
+
+    @staticmethod
+    def missing_ratings():
+        stats = feedback_stats()
+        return max(TASTE_MIN_PERFECT - stats["liked"], 0), max(TASTE_MIN_DISLIKED - stats["disliked"], 0)
+
+    def train(self, log=print):
+        try:
+            import numpy as np
+        except ImportError:
+            raise ImportError("numpy") from None
+        need_perfect, need_disliked = self.missing_ratings()
+        if need_perfect or need_disliked:
+            raise ValueError(f"The taste model switches on once you have {TASTE_MIN_PERFECT} Perfect and "
+                             f"{TASTE_MIN_DISLIKED} Disliked ratings (about {need_perfect} more Perfect and "
+                             f"{need_disliked} more Disliked). Menu option 5 (Discover) is the fastest way.")
+        feedback = load_feedback()
+        rated = {n: v["verdict"] for n, v in feedback.items()
+                 if v.get("verdict") in ("liked", "disliked") and (FEEDBACK_DIR / v["verdict"] / f"{n}.png").is_file()}
+
+        cache = {}
+        try:
+            with np.load(EMBED_PATH) as z:
+                if z["vecs"].shape[1] == EMBED_DIMS:
+                    cache = dict(zip([str(n) for n in z["names"]], z["vecs"].astype(np.float64)))
+        except (OSError, ValueError, KeyError):
+            pass
+        todo = [n for n in rated if n not in cache]
+        if todo:
+            log(f"Learning your taste: reading {len(todo)} rated avatars (one time only, roughly "
+                f"{max(1, round(len(todo) / (EMBED_WORKERS * 0.3) / 60))} min)...")
+
+            def one(name):
+                return name, embed_image((FEEDBACK_DIR / rated[name] / f"{name}.png").read_bytes(), self.api_key)
+
+            with ThreadPoolExecutor(EMBED_WORKERS) as pool:
+                for i, (name, vec) in enumerate(pool.map(one, todo), 1):
+                    if vec is not None and len(vec) == EMBED_DIMS:
+                        cache[name] = np.array(vec, dtype=np.float64)
+                    if i % 100 == 0:
+                        log(f"  {i}/{len(todo)}")
+            CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+            keep_names = [n for n in cache if n in rated]
+            np.savez_compressed(EMBED_PATH, names=np.array(keep_names),
+                                vecs=np.array([cache[n] for n in keep_names], dtype=np.float16))
+
+        names = [n for n in rated if n in cache]
+        X = np.array([cache[n] for n in names])
+        X /= np.linalg.norm(X, axis=1, keepdims=True)
+        y = np.array([1 if rated[n] == "liked" else 0 for n in names])
+        if y.sum() < TASTE_MIN_PERFECT or (1 - y).sum() < TASTE_MIN_DISLIKED:
+            raise RuntimeError("couldn't read enough of your rated avatars right now - try again in a minute")
+
+        # Self-test: predict every rating from the others (5-fold) to pick the bar and report how well it knows you.
+        rng = np.random.RandomState(0)
+        fold = np.zeros(len(y), dtype=int)
+        for label in (0, 1):
+            members = rng.permutation(np.where(y == label)[0])
+            fold[members] = np.arange(len(members)) % 5
+        held_out = np.zeros(len(y))
+        for f in range(5):
+            train, test = fold != f, fold == f
+            held_out[test] = X[test] @ _fit(np, X[train], y[train])
+        self.bar = float(np.quantile(held_out[y == 1], 1 - self.keep / 100))
+        self.beta = _fit(np, X, y)
+        self.info = {"perfect": int(y.sum()), "disliked": int((1 - y).sum()),
+                     "kept": round(100 * float((held_out[y == 1] >= self.bar).mean())),
+                     "rejected": round(100 * float((held_out[y == 0] < self.bar).mean()))}
+
+    def accepts(self, vec):
+        import numpy as np
+        v = np.array(vec, dtype=np.float64)
+        return float((v / np.linalg.norm(v)) @ self.beta) >= self.bar
 
 
 # --- Modes ------------------------------------------------------------------
@@ -895,8 +867,8 @@ class AutoRun:
     on avatars that would be rejected anyway.
     """
 
-    def __init__(self, args, session, seen, judge):
-        self.args, self.session, self.seen, self.judge = args, session, seen, judge
+    def __init__(self, args, session, seen, judge, taste=None):
+        self.args, self.session, self.seen, self.judge, self.taste = args, session, seen, judge, taste
         self.stats = Counter()
         self.handled = set()
         self.looks = KnownLooks()
@@ -934,6 +906,21 @@ class AutoRun:
             save_seen(self.seen)
         return len(fresh)
 
+    def _taste_check(self, passed, images):
+        """Second opinion: only avatars your taste model also accepts go on to be saved."""
+        with ThreadPoolExecutor(EMBED_WORKERS) as pool:
+            vecs = list(pool.map(lambda item: embed_image(images[item[0]["id"]], self.taste.api_key), passed))
+        kept = []
+        for item, vec in zip(passed, vecs):
+            if vec is None or len(vec) != EMBED_DIMS:
+                self.stats["taste check failed (retried next run)"] += 1
+            elif self.taste.accepts(vec):
+                kept.append(item)
+            else:
+                self.seen.add(item[0]["id"])
+                self.stats["AI liked it, your taste model didn't"] += 1
+        return kept
+
     def _judge_batch(self, batch, images):
         try:
             verdicts = self.judge.judge([images[u["id"]] for u in batch])
@@ -954,6 +941,8 @@ class AutoRun:
             else:
                 self.seen.add(user["id"])
                 self.stats["judged, not a match"] += 1
+        if self.taste is not None and passed:
+            passed = self._taste_check(passed, images)
         if not passed:
             return
 
@@ -1023,22 +1012,23 @@ def search_groups(run):
 
 
 def run_auto(args, session, seen, api_key):
-    judge = GeminiJudge(api_key, load_profile())
-    enough, stale = profile_status()
-    if enough and stale:
-        print("Updating your taste profile from your ratings...")
+    judge = GeminiJudge(api_key)
+    taste = None
+    if args.taste_keep < 100:
+        model = TasteModel(api_key, args.taste_keep)
         try:
-            judge.profile = update_taste_profile(judge)
-        except (RuntimeError, ImportError, OSError) as e:
-            print(f"  couldn't update it ({e}); continuing with the old one")
-    if judge.profile:
-        print(f"Using your taste profile (learned from {judge.profile['liked']} Perfect + "
-              f"{judge.profile['disliked']} Disliked ratings). See catalog/taste_profile.txt\n")
-    elif not enough:
-        stats = feedback_stats()
-        print(f"Tip: rate more avatars (menu option 5) to teach it your taste - it needs {PROFILE_MIN_EACH} Perfect "
-              f"and {PROFILE_MIN_EACH} Disliked ({stats['liked']} and {stats['disliked']} so far).\n")
-    run = AutoRun(args, session, seen, judge)
+            model.train()
+            taste = model
+            print(f"Taste model on: learned from {model.info['perfect']} Perfect + {model.info['disliked']} Disliked ratings. "
+                  f"In a self-test it keeps {model.info['kept']}% of your Perfects and rejects {model.info['rejected']}% "
+                  f"of your Disliked.\n")
+        except ValueError as e:
+            print(f"Tip: {e}\n")
+        except ImportError:
+            print("Taste model skipped: it needs numpy. Run   python -m pip install numpy   and try again.\n")
+        except RuntimeError as e:
+            print(f"Taste model skipped: {e}.\n")
+    run = AutoRun(args, session, seen, judge, taste)
     try:
         if args.keywords:
             search_keywords(run)
@@ -1438,6 +1428,7 @@ SETTING_LABELS = {
     "per_keyword": "People to pull per keyword",
     "batch_size": "Avatars per Gemini request",
     "min_score": "Minimum AI match score to save (1-10)",
+    "taste_keep": "Taste model: keep this % of your Perfects (100 = off)",
 }
 
 
@@ -1509,33 +1500,28 @@ def menu_settings(settings):
         print("  Saved.")
 
 
-def menu_taste_profile(api_key):
+def menu_taste_model(api_key, settings):
     stats = feedback_stats()
-    enough, stale = profile_status()
-    profile = load_profile()
     print(f"\nYour ratings: {stats['liked']} Perfect, {stats['disliked']} Disliked.")
-    if not enough:
-        print(f"Rate at least {PROFILE_MIN_EACH} Perfect and {PROFILE_MIN_EACH} Disliked avatars first "
-              f"(menu option 5 is the fastest way), then come back.")
+    if settings["taste_keep"] >= 100:
+        print("The taste model is switched off in Settings (taste_keep = 100).")
         return
-    if profile and not stale:
-        print("Your taste profile is up to date. It is used automatically on every search.")
-        if input("Rebuild it anyway? [y/N]: ").strip().lower() != "y":
-            print("\n" + profile["text"])
-            return
-    print("The AI is studying your ratings...")
+    model = TasteModel(api_key, settings["taste_keep"])
     try:
-        profile = update_taste_profile(GeminiJudge(api_key))
+        model.train()
     except ValueError as e:
         print(e)
         return
     except ImportError:
-        print("This needs the Pillow package: run   python -m pip install pillow   and try again.")
+        print("This needs numpy: run   python -m pip install numpy   and try again.")
         return
     except RuntimeError as e:
-        print(f"Couldn't update it right now ({e}). Try again in a minute.")
+        print(f"Couldn't train it right now ({e}). Try again in a minute.")
         return
-    print(f"\nDone. Your taste profile (saved in {PROFILE_PATH.name}, you can edit it):\n\n{profile['text']}")
+    print(f"\nDone. The taste model learned from {model.info['perfect']} Perfect + {model.info['disliked']} Disliked ratings.")
+    print(f"In a self-test (predicting each rating from all the others) it keeps {model.info['kept']}% of your Perfects "
+          f"and rejects {model.info['rejected']}% of your Disliked.")
+    print("It is retrained automatically before each search, so new ratings are picked up on their own.")
 
 
 def menu_action(choice, session, settings):
@@ -1569,7 +1555,7 @@ def menu_action(choice, session, settings):
     elif choice == "6":
         key = require_api_key()
         if key:
-            menu_taste_profile(key)
+            menu_taste_model(key, settings)
     elif choice == "7":
         open_folder(OUTPUT_DIR)
         return False
@@ -1599,18 +1585,18 @@ def menu():
             total = rated["liked"] + rated["disliked"]
             print(f"  Your ratings: {rated['liked']} perfect, {rated['disliked']} disliked "
                   f"({round(100 * rated['liked'] / total)}% kept)")
-        enough, stale = profile_status()
-        if load_profile():
-            print("  Taste profile: " + ("needs an update (option 6)" if stale else "up to date"))
-        elif enough:
-            print("  Taste profile: not made yet - choose 6")
+        need_perfect, need_disliked = TasteModel.missing_ratings()
+        if need_perfect or need_disliked:
+            print(f"  Taste model: off - needs {need_perfect} more Perfect and {need_disliked} more Disliked ratings")
+        else:
+            print("  Taste model: on (retrained before each search)")
         print()
         print("  1) Find avatars in groups   (best)")
         print("  2) Find avatars by keyword  (slower)")
         print("  3) Save specific usernames")
         print("  4) Review avatars in a grid  (teach it your taste)")
         print("  5) Discover new avatars      (rate them fast)")
-        print("  6) Update my taste profile   (the AI studies your ratings)")
+        print("  6) Train my taste model      (learns from your ratings)")
         print("  7) Open the avatars folder")
         print("  8) Settings")
         print("  9) Change Gemini API key")
@@ -1657,6 +1643,8 @@ def main():
                         help="avatars per Gemini request (default %(default)s)")
     parser.add_argument("--min-score", type=int, default=settings["min_score"],
                         help="AI match score (1-10) an avatar needs to be saved (default %(default)s)")
+    parser.add_argument("--taste-keep", type=int, default=settings["taste_keep"],
+                        help="taste model keeps this %% of your Perfects; lower = pickier, 100 = model off (default %(default)s)")
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

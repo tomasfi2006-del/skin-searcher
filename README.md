@@ -38,21 +38,29 @@ have thrown away.
 
 Three things happen automatically:
 
-1. **Taste profile.** Once you have at least 8 Perfect and 8 Disliked ratings, the
-   AI studies them (menu option **6**, or automatically at the start of a search
-   after 25 new ratings) and writes a short description of your taste: what you
-   love, what you reject, how to decide close calls. It is saved in
-   `catalog/taste_profile.txt` - you can read it and edit it. Every search then
-   uses that text, so it adds no extra cost per avatar.
-2. **Scores.** The AI gives each avatar a 1-10 match score and only saves the ones
-   at or above your cutoff (Settings, default 8; `--min-score` on the command line).
-   Raise it to get fewer, better avatars.
-3. **Look-alike filter.** Avatars that look almost identical to ones you already
-   disliked (mostly Roblox's default starter avatars) are skipped before the AI is
-   even asked - in searches and in Discover.
+1. **Taste model.** Once you have at least 15 Perfect and 50 Disliked ratings, the
+   app turns each rated avatar into a numeric "fingerprint" of how it looks (with
+   Google's embedding model) and trains a small classifier on your computer to
+   recognise what you rate Perfect. Before each search it reads any new ratings
+   and retrains (menu option **6** does it on demand). The first time it reads
+   all your ratings, which takes a few minutes; after that it is instant.
+2. **Two-stage check.** The AI scores each avatar 1-10 (default cutoff 8, see
+   Settings or `--min-score`); avatars that pass must also be accepted by your
+   taste model, whose bar is set so it keeps 90% of your own Perfects (Settings
+   or `--taste-keep`; lower = pickier, 100 = model off).
+3. **Look-alike filter.** Avatars that look almost identical to ones you
+   disliked (mostly Roblox's default starter avatars) are skipped before the AI
+   is even asked, in searches and in Discover.
 
-The menu shows your ratings, your "% kept", and whether the taste profile is up to
-date. The review and Discover pages run only on your own computer and stop when you
+In held-out tests on real ratings, the two-stage check saved about 20% fewer
+avatars and raised the share of saved avatars you would rate Perfect from about
+31% to about 38%, at the cost of about 3% of your Perfects. It keeps improving
+as you rate more (roughly up to a few hundred ratings). An earlier idea - having
+the AI write a text description of your taste - did not beat the plain AI score
+in testing, so it was removed.
+
+The menu shows your ratings, your "% kept", and whether the taste model is on.
+The review and Discover pages run only on your own computer and stop when you
 press Enter in the menu window.
 
 Your key, settings and avatars live in the `catalog/` folder, which is never
@@ -132,6 +140,7 @@ python catalog.py --gallery
 - `--per-keyword` — users to pull per keyword (default 100)
 - `--max-followers` — skip accounts with more followers than this (default 500)
 - `--min-score` — AI match score (1-10) an avatar needs to be saved (default 8)
+- `--taste-keep` — taste model keeps this % of your Perfects; lower = pickier, 100 = off (default 90)
 - `--batch-size` — avatars sent to Gemini per request (default 10)
 - `--shuffle` — randomize keyword order
 
