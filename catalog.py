@@ -63,7 +63,7 @@ DEFAULT_SETTINGS = {
     "groups_per_term": 3,
     "per_keyword": 100,
     "batch_size": 10,
-    "min_score": 7,
+    "min_score": 8,
 }
 MAX_GROUP_PAGES = 50  # stop paging a group after 5,000 members even if most were already seen
 WORKERS = 8

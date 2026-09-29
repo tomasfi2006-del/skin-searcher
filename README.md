@@ -45,7 +45,7 @@ Three things happen automatically:
    `catalog/taste_profile.txt` - you can read it and edit it. Every search then
    uses that text, so it adds no extra cost per avatar.
 2. **Scores.** The AI gives each avatar a 1-10 match score and only saves the ones
-   at or above your cutoff (Settings, default __CUTOFF__; `--min-score` on the command line).
+   at or above your cutoff (Settings, default 8; `--min-score` on the command line).
    Raise it to get fewer, better avatars.
 3. **Look-alike filter.** Avatars that look almost identical to ones you already
    disliked (mostly Roblox's default starter avatars) are skipped before the AI is
@@ -131,7 +131,7 @@ python catalog.py --gallery
 - `--groups-per-term` — how many matching groups to use per search term (default 3)
 - `--per-keyword` — users to pull per keyword (default 100)
 - `--max-followers` — skip accounts with more followers than this (default 500)
-- `--min-score` — AI match score (1-10) an avatar needs to be saved (default __CUTOFF__)
+- `--min-score` — AI match score (1-10) an avatar needs to be saved (default 8)
 - `--batch-size` — avatars sent to Gemini per request (default 10)
 - `--shuffle` — randomize keyword order
 
