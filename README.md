@@ -52,6 +52,12 @@ Three things happen automatically:
    disliked (mostly Roblox's default starter avatars) are skipped before the AI
    is even asked, in searches and in Discover.
 
+Google's free tier allows **1000 taste-model lookups per day**. Reading your
+existing ratings uses one lookup each (once), and after that each avatar the AI
+approves uses one. If the limit is reached mid-run, the app stops cleanly and
+keeps everything; rerun the next day (a half-read set of ratings also resumes
+where it stopped), or set `taste_keep` to 100 to run without the model.
+
 In held-out tests on real ratings, the two-stage check saved about 20% fewer
 avatars and raised the share of saved avatars you would rate Perfect from about
 31% to about 38%, at the cost of about 3% of your Perfects. It keeps improving

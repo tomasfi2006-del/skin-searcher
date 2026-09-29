@@ -712,8 +712,14 @@ def api_key_works(key):
 # fingerprints you rate Perfect. Tested on held-out ratings it ranks avatars better and far more consistently than the
 # AI's score alone, and the two together are better still. The training runs on your computer.
 
+EMBED_DAILY_MESSAGE = ("Google's free limit of 1000 taste-model lookups per day is used up "
+                       "(set taste_keep to 100 in Settings to run without the taste model)")
+
+
 def embed_image(png, api_key):
-    """A fingerprint of how an avatar looks, or None if it couldn't be made right now."""
+    """A fingerprint of how an avatar looks, or None if it couldn't be made right now.
+
+    Raises DailyQuotaExceeded when Google's free daily limit for this is used up."""
     body = {"content": {"parts": [{"inline_data": {"mime_type": "image/png", "data": base64.b64encode(png).decode()}}]},
             "outputDimensionality": EMBED_DIMS}
     for attempt in range(5):
@@ -729,7 +735,12 @@ def embed_image(png, api_key):
                 return None
         if resp.status_code in (401, 403) or "API_KEY_INVALID" in resp.text:
             raise InvalidApiKey("Gemini rejected the API key")
-        if resp.status_code == 429 or resp.status_code >= 500:
+        if resp.status_code == 429:
+            if "PerDay" in resp.text:
+                raise DailyQuotaExceeded(EMBED_DAILY_MESSAGE)
+            time.sleep(min(_quota_info(resp)[1] or 5, 30))
+            continue
+        if resp.status_code >= 500:
             time.sleep(2 * (attempt + 1))
             continue
         return None
@@ -782,21 +793,39 @@ class TasteModel:
         todo = [n for n in rated if n not in cache]
         if todo:
             log(f"Learning your taste: reading {len(todo)} rated avatars (one time only, roughly "
-                f"{max(1, round(len(todo) / (EMBED_WORKERS * 0.3) / 60))} min)...")
+                f"{max(1, round(len(todo) / (EMBED_WORKERS * 0.3) / 60))} min; uses {len(todo)} of Google's "
+                f"1000 free daily lookups)...")
+
+            stop = threading.Event()
 
             def one(name):
-                return name, embed_image((FEEDBACK_DIR / rated[name] / f"{name}.png").read_bytes(), self.api_key)
+                if stop.is_set():
+                    return name, None
+                try:
+                    return name, embed_image((FEEDBACK_DIR / rated[name] / f"{name}.png").read_bytes(), self.api_key)
+                except DailyQuotaExceeded:
+                    stop.set()
+                    return name, None
 
-            with ThreadPoolExecutor(EMBED_WORKERS) as pool:
-                for i, (name, vec) in enumerate(pool.map(one, todo), 1):
-                    if vec is not None and len(vec) == EMBED_DIMS:
-                        cache[name] = np.array(vec, dtype=np.float64)
-                    if i % 100 == 0:
-                        log(f"  {i}/{len(todo)}")
-            CATALOG_DIR.mkdir(parents=True, exist_ok=True)
-            keep_names = [n for n in cache if n in rated]
-            np.savez_compressed(EMBED_PATH, names=np.array(keep_names),
-                                vecs=np.array([cache[n] for n in keep_names], dtype=np.float16))
+            def save():
+                CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+                keep_names = [n for n in cache if n in rated]
+                np.savez_compressed(EMBED_PATH, names=np.array(keep_names),
+                                    vecs=np.array([cache[n] for n in keep_names], dtype=np.float16))
+
+            try:
+                with ThreadPoolExecutor(EMBED_WORKERS) as pool:
+                    for i, (name, vec) in enumerate(pool.map(one, todo), 1):
+                        if vec is not None and len(vec) == EMBED_DIMS:
+                            cache[name] = np.array(vec, dtype=np.float64)
+                        if i % 100 == 0:
+                            log(f"  {i}/{len(todo)}")
+                            save()  # keep progress, so an interruption never loses what was read
+            finally:
+                save()
+            if stop.is_set():
+                left = len([n for n in rated if n not in cache])
+                log(f"Google's free daily limit for this was reached: {left} of your ratings will be read tomorrow.")
 
         names = [n for n in rated if n in cache]
         X = np.array([cache[n] for n in names])
@@ -908,8 +937,17 @@ class AutoRun:
 
     def _taste_check(self, passed, images):
         """Second opinion: only avatars your taste model also accepts go on to be saved."""
+        def embed(item):
+            try:
+                return embed_image(images[item[0]["id"]], self.taste.api_key)
+            except DailyQuotaExceeded as e:
+                return e
+
         with ThreadPoolExecutor(EMBED_WORKERS) as pool:
-            vecs = list(pool.map(lambda item: embed_image(images[item[0]["id"]], self.taste.api_key), passed))
+            vecs = list(pool.map(embed, passed))
+        for vec in vecs:
+            if isinstance(vec, DailyQuotaExceeded):
+                raise vec
         kept = []
         for item, vec in zip(passed, vecs):
             if vec is None or len(vec) != EMBED_DIMS:
