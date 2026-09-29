@@ -18,6 +18,7 @@ result are remembered, so reruns only look at new people.
 import argparse
 import base64
 import getpass
+import io
 import json
 import os
 import random
@@ -46,7 +47,12 @@ SETTINGS_PATH = CATALOG_DIR / "settings.json"
 KEY_PATH = CATALOG_DIR / "gemini_key.txt"
 FEEDBACK_PATH = CATALOG_DIR / "feedback.json"
 FEEDBACK_DIR = CATALOG_DIR / "feedback"  # liked/ and disliked/ copies used as examples for the AI
-EXAMPLES_PER_SIDE = 4  # rated avatars of each kind shown to Gemini with every request
+PROFILE_PATH = CATALOG_DIR / "taste_profile.txt"  # plain text: you can read and edit it
+PROFILE_META_PATH = CATALOG_DIR / "taste_profile.json"
+SHEET_SIZE = 24  # avatars per contact sheet when writing the taste profile
+PROFILE_MAX_LIKED, PROFILE_MAX_DISLIKED = 72, 144  # rated avatars the AI looks at when writing it
+PROFILE_MIN_EACH = 8  # Perfect and Disliked ratings needed before a profile is worth making
+PROFILE_REFRESH_AFTER = 25  # new ratings before the profile is rebuilt automatically
 DISLIKE_REASONS = ["Too plain", "Messy / random mix", "Not my style"]
 NAME_RE = re.compile(r"[A-Za-z0-9_]{1,40}")  # Roblox usernames
 
@@ -57,6 +63,7 @@ DEFAULT_SETTINGS = {
     "groups_per_term": 3,
     "per_keyword": 100,
     "batch_size": 10,
+    "min_score": 7,
 }
 MAX_GROUP_PAGES = 50  # stop paging a group after 5,000 members even if most were already seen
 WORKERS = 8
@@ -78,32 +85,47 @@ GEMINI_MIN_INTERVAL = 4.2  # per model: free tier allows 15 requests/min each
 
 JUDGE_PROMPT = """You are helping a Roblox content creator pick avatars to \
 feature in recordings by literally copying the look onto themselves. You \
-will see {n} avatar renders, each labeled "Avatar N:". Judge each one on its \
-own (do not compare them to each other).
+will see {n} avatar renders, each labeled "Avatar N:". Score each one on its \
+own (do not compare them to each other) from 1 to 10 for how much this \
+creator would want to copy that look:
+10 = exactly their taste, 7 = probably, 4 = unlikely, 1 = plain, default or \
+clearly not for them. Most random Roblox avatars are plain: score those low.
 
-An avatar is a match if it stands out and has personality - something a \
-viewer would notice in a video. Good signs (it does NOT need all of them):
-- a standout hat/headpiece or signature accessory
-- a clear character or theme: costume, job, meme, fantasy, anime, etc \
-(famous characters like Sonic or Santa are fine)
-- bold color: saturated colors, a rainbow/gradient, or a striking \
-monochrome/high-contrast look (all black, all red, black + one accent)
-- a funny or quirky touch: text shirt, silly face, props, pets, effects
+General guide (use it where nothing below says otherwise). An avatar stands \
+out and has personality when it has: a standout hat/headpiece or signature \
+accessory; a clear character or theme (costume, job, meme, fantasy, anime - \
+famous characters are fine); bold color (saturated colors, rainbow/gradient, \
+or a striking monochrome/high-contrast look); or a funny, quirky touch. It \
+scores low when it looks plain or default (basic shirt and pants, default \
+skin tones and colors, nothing interesting) or is piled with so many \
+accessories that the character is hard to read.
+{taste}
+Return one entry per avatar: its number, the score, and a short reason."""
 
-Reject it only if:
-- it looks plain or default: basic shirt and pants, default skin tones and \
-colors, nothing interesting on the head, OR
-- it's piled with so many accessories that the character is hard to read \
-(a few accessories are fine).
+TASTE_BLOCK = """
+THIS CREATOR'S TASTE PROFILE - learned from {liked} avatars they marked \
+Perfect and {disliked} they disliked. It overrides the general guide \
+wherever they disagree:
+{profile}
+"""
 
-When unsure between a fun, eye-catching look and a plain one, pick the fun one.
+PROFILE_PROMPT = """A Roblox content creator rated {total} random Roblox avatars to \
+teach you their taste in avatars to copy for their videos. Only {pct}% were \
+marked PERFECT; the rest were DISLIKED. Below are contact sheets of avatars: \
+first some they marked PERFECT, then a random sample of the ones they \
+DISLIKED.{reasons}
 
-Return one entry per avatar with its number, the verdict, and a short reason."""
+Write this creator's TASTE PROFILE for another AI that will score new \
+avatars from pictures. Plain text, at most 300 words, in these sections:
+LOVES: 5-8 concrete, visible traits shared by the PERFECT avatars.
+REJECTS: 5-8 concrete, visible traits of the DISLIKED ones. Describe the most \
+common rejected looks specifically (for example Roblox's default starter \
+avatars, plain shirt-and-pants outfits) so they can be recognised.
+TIE-BREAKERS: how to decide close calls between a Perfect and a Disliked look.
+CALIBRATION: a Perfect is rare (about {pct}%), so most avatars should score low.
 
-EXAMPLES_INTRO = """CALIBRATION: below are reference avatars this creator has already rated. \
-Study them - they show this creator's real taste and override the general rules \
-above wherever they disagree. Do NOT return verdicts for the references; only \
-for the numbered "Avatar N" images that come after them."""
+Be specific and visual. Only describe what you can actually see in the \
+sheets, do not invent traits, and do not mention usernames."""
 
 VERDICT_SCHEMA = {
     "type": "ARRAY",
@@ -111,10 +133,10 @@ VERDICT_SCHEMA = {
         "type": "OBJECT",
         "properties": {
             "avatar": {"type": "INTEGER"},
-            "flashy": {"type": "BOOLEAN"},
+            "score": {"type": "INTEGER"},
             "reason": {"type": "STRING"},
         },
-        "required": ["avatar", "flashy", "reason"],
+        "required": ["avatar", "score", "reason"],
     },
 }
 
@@ -309,11 +331,11 @@ def _quota_info(resp):
 
 
 class GeminiJudge:
-    """Judges avatars in batches (quotas count requests, not images), rotating models."""
+    """Talks to Gemini: scores avatars in batches (quotas count requests, not images) and writes the taste profile."""
 
-    def __init__(self, api_key, examples=None):
+    def __init__(self, api_key, profile=None):
         self.headers = {"x-goog-api-key": api_key}  # header, not URL, so errors never print the key
-        self.examples = examples or {"liked": [], "disliked": []}
+        self.profile = profile  # {"text": ..., "liked": n, "disliked": n} or None
         self.models = list(GEMINI_MODELS)
         self.turn = 0
         self.last_call = {}
@@ -328,37 +350,10 @@ class GeminiJudge:
         print(f"  {model} {why}" + (", using the other model" if len(self.models) > 1 else ""))
         self.models.remove(model)
 
-    def _example_parts(self):
-        liked, disliked = self.examples["liked"], self.examples["disliked"]
-        if not liked and not disliked:
-            return []
-        parts = [{"text": EXAMPLES_INTRO}]
-        reasons = dislike_reason_counts()
-        if reasons:
-            parts.append({"text": "The creator most often rejects avatars for these reasons: "
-                                  + ", ".join(f"{r} ({n}x)" for r, n in reasons) + "."})
-        for i, image in enumerate(liked, 1):
-            parts.append({"text": f"Reference GOOD {i} (the creator loved this one - a match):"})
-            parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(image).decode()}})
-        for i, (image, reason) in enumerate(disliked, 1):
-            why = f" Reason: {reason}." if reason else ""
-            parts.append({"text": f"Reference BAD {i} (the creator disliked this one - NOT a match).{why}"})
-            parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(image).decode()}})
-        parts.append({"text": "Now judge these avatars:"})
-        return parts
-
-    def judge(self, images):
-        """Returns {index: (flashy, reason)}; indexes missing from the reply are left out."""
-        parts = [{"text": JUDGE_PROMPT.format(n=len(images))}]
-        parts += self._example_parts()
-        for i, img in enumerate(images, 1):
-            parts.append({"text": f"Avatar {i}:"})
-            parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(img).decode()}})
-        body = {
-            "contents": [{"parts": parts}],
-            "generationConfig": {"responseMimeType": "application/json", "responseSchema": VERDICT_SCHEMA},
-        }
-
+    def _ask(self, parts, schema=None, timeout=60):
+        """Sends one request (rotating models, pacing, retries) and returns the reply text."""
+        config = {"responseMimeType": "application/json", "responseSchema": schema} if schema else {}
+        body = {"contents": [{"parts": parts}], "generationConfig": config}
         start = self.turn % max(len(self.models), 1)
         self.turn += 1
         last_error = "no model available"
@@ -366,19 +361,14 @@ class GeminiJudge:
             for attempt in range(2):
                 self._pace(model)
                 try:
-                    resp = requests.post(GEMINI_URL.format(model), headers=self.headers, json=body, timeout=60)
+                    resp = requests.post(GEMINI_URL.format(model), headers=self.headers, json=body, timeout=timeout)
                 except requests.RequestException as e:
                     last_error = f"{model}: {type(e).__name__}"
                     continue
                 if resp.ok:
                     try:
-                        parts = resp.json()["candidates"][0]["content"]["parts"]
-                        text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
-                        verdicts = {}
-                        for v in json.loads(text):
-                            if isinstance(v.get("avatar"), int) and 1 <= v["avatar"] <= len(images):
-                                verdicts[v["avatar"] - 1] = (bool(v.get("flashy")), v.get("reason", ""))
-                        return verdicts
+                        reply = resp.json()["candidates"][0]["content"]["parts"]
+                        return "".join(p.get("text", "") for p in reply if not p.get("thought"))
                     except (KeyError, IndexError, ValueError, AttributeError, TypeError):
                         last_error = f"{model}: unreadable reply"
                         continue
@@ -402,6 +392,45 @@ class GeminiJudge:
         if not self.models:
             raise DailyQuotaExceeded("both Gemini models are out of quota for today")
         raise RuntimeError(last_error)
+
+    def judge(self, images):
+        """Returns {index: (score 1-10, reason)}; indexes missing from the reply are left out."""
+        taste = ""
+        if self.profile:
+            taste = (TASTE_BLOCK.replace("{liked}", str(self.profile["liked"]))
+                     .replace("{disliked}", str(self.profile["disliked"])).replace("{profile}", self.profile["text"]))
+        parts = [{"text": JUDGE_PROMPT.replace("{n}", str(len(images))).replace("{taste}", taste)}]
+        for i, img in enumerate(images, 1):
+            parts.append({"text": f"Avatar {i}:"})
+            parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(img).decode()}})
+        for _ in range(2):
+            try:
+                verdicts = {}
+                for v in json.loads(self._ask(parts, VERDICT_SCHEMA)):
+                    if isinstance(v.get("avatar"), int) and 1 <= v["avatar"] <= len(images) and isinstance(v.get("score"), int):
+                        verdicts[v["avatar"] - 1] = (v["score"], v.get("reason", ""))
+                return verdicts
+            except (ValueError, AttributeError, TypeError):
+                continue  # the reply wasn't valid JSON: ask once more
+        raise RuntimeError("unreadable reply")
+
+    def write_profile(self, liked_images, disliked_images, total_liked, total_disliked, reasons):
+        """Asks Gemini to describe the creator's taste from contact sheets of their rated avatars."""
+        total = total_liked + total_disliked
+        pct = max(1, round(100 * total_liked / total))
+        why = ""
+        if reasons:
+            why = " Reasons they gave for dislikes: " + ", ".join(f"{r} ({n}x)" for r, n in reasons) + "."
+        parts = [{"text": PROFILE_PROMPT.replace("{total}", str(total)).replace("{pct}", str(pct)).replace("{reasons}", why)}]
+        for label, images in (("PERFECT", liked_images), ("DISLIKED", disliked_images)):
+            sheets = [images[i:i + SHEET_SIZE] for i in range(0, len(images), SHEET_SIZE)]
+            for n, group in enumerate(sheets, 1):
+                parts.append({"text": f"{label} avatars, sheet {n} of {len(sheets)}:"})
+                parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(contact_sheet(group)).decode()}})
+        text = self._ask(parts, timeout=120).strip()
+        if len(text) < 80:
+            raise RuntimeError("the profile came back empty")
+        return text
 
 
 # --- State ------------------------------------------------------------------
@@ -551,6 +580,7 @@ class CandidateFeed:
         self.finished = False
         self.lock = threading.Lock()
         self.stop = threading.Event()
+        self.looks = KnownLooks()
 
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
@@ -605,7 +635,7 @@ class CandidateFeed:
         images = fetch_avatar_images(self.session, [u["id"] for u in fresh])
         with self.lock:
             for u in fresh:
-                if u["id"] in images:
+                if u["id"] in images and not self.looks.is_junk(images[u["id"]]):
                     self.ready.append({"id": u["id"], "name": u["name"], "image": images[u["id"]]})
 
     def take(self, n):
@@ -617,24 +647,140 @@ class CandidateFeed:
             return [i["name"] for i in items], (self.finished and not self.ready)
 
 
-def pick_examples(per_side=EXAMPLES_PER_SIDE):
-    """A random sample of rated avatars to show Gemini: {'liked': [bytes], 'disliked': [(bytes, reason)]}."""
-    feedback = load_feedback()
-    picked = {"liked": [], "disliked": []}
-    for verdict, folder in (("liked", "liked"), ("disliked", "disliked")):
-        names = [n for n, v in feedback.items()
-                 if v.get("verdict") == verdict and (FEEDBACK_DIR / folder / f"{n}.png").is_file()]
-        random.shuffle(names)
-        for name in names[:per_side]:
-            image = (FEEDBACK_DIR / folder / f"{name}.png").read_bytes()
-            picked[verdict].append(image if verdict == "liked" else (image, feedback[name].get("reason")))
-    return picked
-
-
 def dislike_reason_counts():
     counts = Counter(v.get("reason") for v in load_feedback().values()
                      if v.get("verdict") == "disliked" and v.get("reason"))
     return counts.most_common()
+
+
+def contact_sheet(images, cols=6, cell=190):
+    """Many avatars in one picture, so the AI can look at lots of them cheaply."""
+    from PIL import Image  # Pillow: only needed for this and the look-alike filter
+    rows = -(-len(images) // cols)
+    sheet = Image.new("RGB", (cols * cell, rows * cell), "white")
+    for i, data in enumerate(images):
+        img = Image.open(io.BytesIO(data)).convert("RGBA").resize((cell, cell), Image.LANCZOS)
+        sheet.paste(img, ((i % cols) * cell, (i // cols) * cell), img)
+    out = io.BytesIO()
+    sheet.save(out, "PNG")
+    return out.getvalue()
+
+
+LOOKALIKE_DISTANCE = 4  # how similar (out of 144 bits) counts as "the same look"; tested to lose ~2% of Perfects
+LOOKALIKE_MIN_DISLIKES = 20  # don't trust the filter until there are this many dislikes
+LOOKS_CACHE_PATH = CATALOG_DIR / "looks.json"
+
+
+def look_hash(png):
+    """A tiny fingerprint of how an avatar looks; similar looks get similar numbers. None without Pillow."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    size = 12
+    img = Image.open(io.BytesIO(png)).convert("RGBA")
+    flat = Image.new("RGBA", img.size, "white")
+    flat.alpha_composite(img)
+    gray = flat.convert("L").resize((size + 1, size), Image.LANCZOS)
+    px = list(gray.get_flattened_data() if hasattr(gray, "get_flattened_data") else gray.getdata())
+    bits = 0
+    for r in range(size):
+        for c in range(size):
+            bits = (bits << 1) | (px[r * (size + 1) + c] > px[r * (size + 1) + c + 1])
+    return bits
+
+
+class KnownLooks:
+    """Skips avatars that look almost identical to ones you disliked (mostly Roblox's default starter avatars)."""
+
+    def __init__(self):
+        self.disliked, self.liked = [], []
+        try:
+            cache = json.loads(LOOKS_CACHE_PATH.read_text())
+        except (OSError, ValueError):
+            cache = {}
+        fresh, feedback = {}, load_feedback()
+        for name, entry in feedback.items():
+            verdict = entry.get("verdict")
+            path = FEEDBACK_DIR / verdict / f"{name}.png" if verdict in ("liked", "disliked") else None
+            if path is None or not path.is_file():
+                continue
+            key = f"{verdict}/{name}"
+            value = cache.get(key)
+            if value is None:
+                value = look_hash(path.read_bytes())
+            if value is None:  # Pillow isn't installed
+                self.disliked = self.liked = []
+                return
+            fresh[key] = value
+            (self.disliked if verdict == "disliked" else self.liked).append(value)
+        if fresh != cache:
+            try:
+                LOOKS_CACHE_PATH.write_text(json.dumps(fresh))
+            except OSError:
+                pass
+        if len(self.disliked) < LOOKALIKE_MIN_DISLIKES:
+            self.disliked = []
+
+    def is_junk(self, png):
+        if not self.disliked:
+            return False
+        h = look_hash(png)
+        if h is None:
+            return False
+        near = min(bin(h ^ d).count("1") for d in self.disliked)
+        if near > LOOKALIKE_DISTANCE:
+            return False
+        return min([bin(h ^ l).count("1") for l in self.liked] + [99]) > near  # closer to a Perfect? keep it
+
+
+def load_profile():
+    """The saved taste profile as {'text', 'liked', 'disliked'}, or None."""
+    try:
+        text = PROFILE_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    try:
+        meta = json.loads(PROFILE_META_PATH.read_text())
+    except (OSError, ValueError):
+        meta = {}
+    return {"text": text, "liked": int(meta.get("liked", 0)), "disliked": int(meta.get("disliked", 0))}
+
+
+def profile_status():
+    """(enough ratings to make a profile, the profile is missing or out of date)."""
+    stats = feedback_stats()
+    enough = min(stats["liked"], stats["disliked"]) >= PROFILE_MIN_EACH
+    profile = load_profile()
+    made_from = (profile["liked"] + profile["disliked"]) if profile else 0
+    stale = profile is None or (stats["liked"] + stats["disliked"]) - made_from >= PROFILE_REFRESH_AFTER
+    return enough, stale
+
+
+def update_taste_profile(judge):
+    """Has Gemini study your ratings and writes catalog/taste_profile.txt. Returns the profile."""
+    feedback = load_feedback()
+    stats = feedback_stats(feedback)
+    if min(stats["liked"], stats["disliked"]) < PROFILE_MIN_EACH:
+        raise ValueError(f"Rate at least {PROFILE_MIN_EACH} avatars Perfect and {PROFILE_MIN_EACH} Disliked first "
+                         f"(you have {stats['liked']} and {stats['disliked']}).")
+
+    def sample(verdict, limit):
+        names = [n for n, v in feedback.items() if v.get("verdict") == verdict
+                 and (FEEDBACK_DIR / verdict / f"{n}.png").is_file()]
+        random.shuffle(names)
+        return [(FEEDBACK_DIR / verdict / f"{n}.png").read_bytes() for n in names[:limit]]
+
+    text = judge.write_profile(sample("liked", PROFILE_MAX_LIKED), sample("disliked", PROFILE_MAX_DISLIKED),
+                               stats["liked"], stats["disliked"], dislike_reason_counts())
+    CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+    if PROFILE_PATH.exists():
+        shutil.copyfile(PROFILE_PATH, PROFILE_PATH.with_name("taste_profile.previous.txt"))
+    PROFILE_PATH.write_text(text + "\n", encoding="utf-8")
+    PROFILE_META_PATH.write_text(json.dumps({**stats, "time": int(time.time())}))
+    return {"text": text, **stats}
 
 
 def load_settings():
@@ -716,6 +862,7 @@ class AutoRun:
         self.args, self.session, self.seen, self.judge = args, session, seen, judge
         self.stats = Counter()
         self.handled = set()
+        self.looks = KnownLooks()
 
     def process(self, users, limit=None):
         """Judges and saves up to `limit` new candidates; returns how many were new."""
@@ -735,6 +882,14 @@ class AutoRun:
         images = fetch_avatar_images(self.session, [u["id"] for u in candidates])
         ready = [u for u in candidates if u["id"] in images]
         self.stats["no avatar render (retried next run)"] += len(candidates) - len(ready)
+        kept = []
+        for user in ready:
+            if self.looks.is_junk(images[user["id"]]):
+                self.seen.add(user["id"])
+                self.stats["look like avatars you disliked"] += 1
+            else:
+                kept.append(user)
+        ready = kept
 
         size = self.args.batch_size
         for i in range(0, len(ready), size):
@@ -757,16 +912,16 @@ class AutoRun:
             verdict = verdicts.get(idx)
             if verdict is None:
                 self.stats["not judged (retried next run)"] += 1
-            elif verdict[0]:
-                passed.append((user, verdict[1]))
+            elif verdict[0] >= self.args.min_score:
+                passed.append((user, verdict[1], verdict[0]))
             else:
                 self.seen.add(user["id"])
                 self.stats["judged, not a match"] += 1
         if not passed:
             return
 
-        counts = follower_counts(self.session, [user for user, _ in passed])
-        for user, reason in passed:
+        counts = follower_counts(self.session, [user for user, _, _ in passed])
+        for user, reason, score in passed:
             count = counts.get(user["id"])
             if count is None:
                 self.stats["follower lookup failed (retried next run)"] += 1
@@ -777,7 +932,7 @@ class AutoRun:
                 save_avatar(user, images[user["id"]])
                 self.seen.add(user["id"])
                 self.stats["saved"] += 1
-                print(f"  + {user['name']} - {reason}")
+                print(f"  + {user['name']} [{score}/10] - {reason}")
 
 
 def search_keywords(run):
@@ -831,11 +986,22 @@ def search_groups(run):
 
 
 def run_auto(args, session, seen, api_key):
-    examples = pick_examples()
-    if examples["liked"] or examples["disliked"]:
-        print(f"Using your ratings to match your taste "
-              f"({len(examples['liked'])} perfect + {len(examples['disliked'])} disliked examples).\n")
-    run = AutoRun(args, session, seen, GeminiJudge(api_key, examples))
+    judge = GeminiJudge(api_key, load_profile())
+    enough, stale = profile_status()
+    if enough and stale:
+        print("Updating your taste profile from your ratings...")
+        try:
+            judge.profile = update_taste_profile(judge)
+        except (RuntimeError, ImportError, OSError) as e:
+            print(f"  couldn't update it ({e}); continuing with the old one")
+    if judge.profile:
+        print(f"Using your taste profile (learned from {judge.profile['liked']} Perfect + "
+              f"{judge.profile['disliked']} Disliked ratings). See catalog/taste_profile.txt\n")
+    elif not enough:
+        stats = feedback_stats()
+        print(f"Tip: rate more avatars (menu option 5) to teach it your taste - it needs {PROFILE_MIN_EACH} Perfect "
+              f"and {PROFILE_MIN_EACH} Disliked ({stats['liked']} and {stats['disliked']} so far).\n")
+    run = AutoRun(args, session, seen, judge)
     try:
         if args.keywords:
             search_keywords(run)
@@ -1234,6 +1400,7 @@ SETTING_LABELS = {
     "groups_per_term": "Groups to use per group search word",
     "per_keyword": "People to pull per keyword",
     "batch_size": "Avatars per Gemini request",
+    "min_score": "Minimum AI match score to save (1-10)",
 }
 
 
@@ -1305,6 +1472,35 @@ def menu_settings(settings):
         print("  Saved.")
 
 
+def menu_taste_profile(api_key):
+    stats = feedback_stats()
+    enough, stale = profile_status()
+    profile = load_profile()
+    print(f"\nYour ratings: {stats['liked']} Perfect, {stats['disliked']} Disliked.")
+    if not enough:
+        print(f"Rate at least {PROFILE_MIN_EACH} Perfect and {PROFILE_MIN_EACH} Disliked avatars first "
+              f"(menu option 5 is the fastest way), then come back.")
+        return
+    if profile and not stale:
+        print("Your taste profile is up to date. It is used automatically on every search.")
+        if input("Rebuild it anyway? [y/N]: ").strip().lower() != "y":
+            print("\n" + profile["text"])
+            return
+    print("The AI is studying your ratings...")
+    try:
+        profile = update_taste_profile(GeminiJudge(api_key))
+    except ValueError as e:
+        print(e)
+        return
+    except ImportError:
+        print("This needs the Pillow package: run   python -m pip install pillow   and try again.")
+        return
+    except RuntimeError as e:
+        print(f"Couldn't update it right now ({e}). Try again in a minute.")
+        return
+    print(f"\nDone. Your taste profile (saved in {PROFILE_PATH.name}, you can edit it):\n\n{profile['text']}")
+
+
 def menu_action(choice, session, settings):
     seen = load_seen()
     if choice == "1":
@@ -1334,12 +1530,16 @@ def menu_action(choice, session, settings):
         show_discovery(terms or DISCOVER_DEFAULT_TERMS, session, settings["max_followers"])
         return False
     elif choice == "6":
+        key = require_api_key()
+        if key:
+            menu_taste_profile(key)
+    elif choice == "7":
         open_folder(OUTPUT_DIR)
         return False
-    elif choice == "7":
+    elif choice == "8":
         menu_settings(settings)
         return False
-    elif choice == "8":
+    elif choice == "9":
         set_api_key()
     else:
         print("Pick a number from the menu.")
@@ -1362,15 +1562,21 @@ def menu():
             total = rated["liked"] + rated["disliked"]
             print(f"  Your ratings: {rated['liked']} perfect, {rated['disliked']} disliked "
                   f"({round(100 * rated['liked'] / total)}% kept)")
+        enough, stale = profile_status()
+        if load_profile():
+            print("  Taste profile: " + ("needs an update (option 6)" if stale else "up to date"))
+        elif enough:
+            print("  Taste profile: not made yet - choose 6")
         print()
         print("  1) Find avatars in groups   (best)")
         print("  2) Find avatars by keyword  (slower)")
         print("  3) Save specific usernames")
         print("  4) Review avatars in a grid  (teach it your taste)")
         print("  5) Discover new avatars      (rate them fast)")
-        print("  6) Open the avatars folder")
-        print("  7) Settings")
-        print("  8) Change Gemini API key")
+        print("  6) Update my taste profile   (the AI studies your ratings)")
+        print("  7) Open the avatars folder")
+        print("  8) Settings")
+        print("  9) Change Gemini API key")
         print("  0) Quit")
         try:
             choice = input("\nChoose: ").strip()
@@ -1381,7 +1587,7 @@ def menu():
         except KeyboardInterrupt:
             print("\nBack to the menu.")
         except InvalidApiKey:
-            print("\nGemini rejected your API key. Choose 8 to enter a new one.")
+            print("\nGemini rejected your API key. Choose 9 to enter a new one.")
         except EOFError:
             return
 
@@ -1412,6 +1618,8 @@ def main():
                         help="skip accounts with more followers than this (default %(default)s)")
     parser.add_argument("--batch-size", type=int, default=settings["batch_size"],
                         help="avatars per Gemini request (default %(default)s)")
+    parser.add_argument("--min-score", type=int, default=settings["min_score"],
+                        help="AI match score (1-10) an avatar needs to be saved (default %(default)s)")
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1433,7 +1641,7 @@ def main():
     try:
         run_auto(args, session, seen, api_key)
     except InvalidApiKey:
-        sys.exit("Gemini rejected the API key - set a new one from the menu (option 8)")
+        sys.exit("Gemini rejected the API key - set a new one from the menu (option 9)")
 
 
 if __name__ == "__main__":
