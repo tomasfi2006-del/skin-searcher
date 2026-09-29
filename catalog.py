@@ -10,7 +10,9 @@ Run with no options for an interactive menu, or use:
   --gallery    review saved avatars in a grid; your Perfect/Dislike ratings teach the AI.
   --discover   rate fresh avatars from groups with the arrow keys - the fastest way to teach the AI.
 
-Accounts with more than --max-followers followers are always skipped.
+Accounts with more than --max-followers followers are always skipped, and so
+are starter outfits (default skin, bacon hair, the Paladin knight...), before
+Gemini ever sees them.
 
 Avatars are saved as catalog/avatars/<username>.png. Users that get a final
 result are remembered, so reruns only look at new people.
@@ -46,7 +48,8 @@ SETTINGS_PATH = CATALOG_DIR / "settings.json"
 KEY_PATH = CATALOG_DIR / "gemini_key.txt"
 FEEDBACK_PATH = CATALOG_DIR / "feedback.json"
 FEEDBACK_DIR = CATALOG_DIR / "feedback"  # liked/ and disliked/ copies used as examples for the AI
-EXAMPLES_PER_SIDE = 4  # rated avatars of each kind shown to Gemini with every request
+ASSET_INFO_PATH = CATALOG_DIR / "asset_info.json"  # cached catalog facts about worn items
+EXAMPLES_PER_SIDE = 6  # rated avatars of each kind shown to Gemini with every request
 DISLIKE_REASONS = ["Too plain", "Messy / random mix", "Not my style"]
 NAME_RE = re.compile(r"[A-Za-z0-9_]{1,40}")  # Roblox usernames
 
@@ -68,6 +71,17 @@ ROBLOX_THUMB_URL = "https://thumbnails.roblox.com/v1/users/avatar"
 ROBLOX_GROUP_URL = "https://groups.roblox.com/v1/groups/{}"
 ROBLOX_GROUP_SEARCH_URL = "https://groups.roblox.com/v1/groups/search"
 ROBLOX_GROUP_MEMBERS_URL = "https://groups.roblox.com/v1/groups/{}/users"
+# Two outfit endpoints with separate limits (40/min and 60/min), used in turn.
+ROBLOX_OUTFIT_URLS = [("outfit-v1", "https://avatar.roblox.com/v1/users/{}/avatar"),
+                      ("outfit-v2", "https://avatar.roblox.com/v2/avatar/users/{}/avatar")]
+ROBLOX_CATALOG_URL = "https://catalog.roblox.com/v1/catalog/items/details"
+
+# Asset type IDs used by the starter-look check.
+IGNORED_ASSET_TYPES = set(range(48, 57)) | {61, 76, 77, 78}  # animations, emotes, eyebrows/eyelashes
+CLOTHING_ASSET_TYPES = {2, 11, 12, 64, 65, 66, 67, 68, 69, 72}  # t-shirt, shirt, pants, layered clothing
+EVENT_ASSET_TYPES = {44, 45, 47}  # shoulder/front/waist: where Roblox's limited-time freebies (auras, tomes) sit
+BODY_ASSET_TYPES = {17, 18, 27, 28, 29, 30, 31, 79}  # heads, faces, torso, arms, legs
+RETIRED_STARTER_ASSETS = {"144076512"}  # "Pink Jeans": a starter item the catalog no longer lists
 
 GEMINI_MODELS = [
     os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
@@ -79,24 +93,34 @@ GEMINI_MIN_INTERVAL = 4.2  # per model: free tier allows 15 requests/min each
 JUDGE_PROMPT = """You are helping a Roblox content creator pick avatars to \
 feature in recordings by literally copying the look onto themselves. You \
 will see {n} avatar renders, each labeled "Avatar N:". Judge each one on its \
-own (do not compare them to each other).
+own (do not compare them to each other). Be picky: after rating 625 avatars \
+this creator kept fewer than 1 in 10.
 
-An avatar is a match if it stands out and has personality - something a \
-viewer would notice in a video. Good signs (it does NOT need all of them):
-- a standout hat/headpiece or signature accessory
-- a clear character or theme: costume, job, meme, fantasy, anime, etc \
-(famous characters like Sonic or Santa are fine)
-- bold color: saturated colors, a rainbow/gradient, or a striking \
-monochrome/high-contrast look (all black, all red, black + one accent)
-- a funny or quirky touch: text shirt, silly face, props, pets, effects
+A match has ONE clear idea a viewer gets in a second. What they loved:
+- goth / emo / grunge looks, mostly black + white + grey, with real detail: \
+fluffy or spiky hair, chains, plaid, skulls, masks, patterned sleeves, \
+striped socks
+- anime or show cosplay (Akatsuki cloak, JoJo, white-haired sorcerers), \
+cowboys/cowgirls, a sharp red suit, a black-and-gold king
+- cute pastel/pink girls with bows, wings, hearts, fluffy boots
+- meme and joke characters: a leaf with a face, the epic face, a Rabbid, \
+a pumpkin head, a minion, a TV head, a huge muscle body, a classic yellow \
+noob with one funny hat
+- striking effects: neon/rainbow outlines, auras, flames, floating books or \
+cards
 
-Reject it only if:
-- it looks plain or default: basic shirt and pants, default skin tones and \
-colors, nothing interesting on the head, OR
-- it's piled with so many accessories that the character is hard to read \
-(a few accessories are fine).
+Reject it if:
+- it looks like a Roblox starter/default avatar: "bacon" hair, the blue-and-\
+black motorcycle shirt with dark green jeans, red-beanie girl with a teal \
+jacket, fedora + aviator shades starter guys, the pizza hoodie, the gold \
+Paladin knight, Junkbot, the plain grey default head with the stock smile. \
+One extra item on top of a starter outfit does not save it.
+- it's a "normal" realistic kid: long hair, basic top and jeans, no hook
+- it's a plain dark outfit with nothing else (black hoodie + black hair)
+- it's piled with random accessories that don't fit together
 
-When unsure between a fun, eye-catching look and a plain one, pick the fun one.
+When unsure between a fun, readable character and a generic one, pick the \
+character; when it only looks "okay", reject it.
 
 Return one entry per avatar with its number, the verdict, and a short reason."""
 
@@ -283,6 +307,99 @@ def fetch_avatar_images(session, user_ids):
 
     with ThreadPoolExecutor(WORKERS) as pool:
         return {uid: img for uid, img in pool.map(download, urls.items()) if img}
+
+
+def fetch_outfits(session, user_ids):
+    """{user_id: avatar details (worn assets etc)} for every user whose outfit could be read."""
+    def one(item):
+        i, user_id = item
+        bucket, url = ROBLOX_OUTFIT_URLS[i % len(ROBLOX_OUTFIT_URLS)]
+        try:
+            avatar = roblox(session, bucket, "GET", url.format(user_id)).json()
+            return user_id, avatar if isinstance(avatar.get("assets"), list) else None
+        except (requests.RequestException, ValueError, AttributeError):
+            return user_id, None
+
+    with ThreadPoolExecutor(WORKERS) as pool:
+        return {uid: avatar for uid, avatar in pool.map(one, enumerate(user_ids)) if avatar is not None}
+
+
+class AssetInfo:
+    """Who made each worn item and what it costs, from the catalog (10 calls/min, so cached on disk)."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        try:
+            self.cache = json.loads(ASSET_INFO_PATH.read_text())
+        except (OSError, ValueError):
+            self.cache = {}
+
+    def fill(self, session, asset_ids):
+        with self.lock:
+            missing = sorted({str(a) for a in asset_ids} - set(self.cache))
+        for i in range(0, len(missing), 120):
+            body = {"items": [{"itemType": "Asset", "id": int(a)} for a in missing[i:i + 120]]}
+            try:
+                data = self._post(session, body)
+            except (requests.RequestException, KeyError, ValueError):
+                return  # unknown items just don't count as starter items
+            with self.lock:
+                for d in data:
+                    self.cache[str(d["id"])] = {
+                        "roblox": d.get("creatorTargetId") == 1 and d.get("creatorName") == "Roblox",
+                        "free": d.get("price") in (0, None) and not d.get("itemRestrictions"),
+                        "offsale": d.get("priceStatus") == "Off Sale",
+                    }
+                ASSET_INFO_PATH.parent.mkdir(parents=True, exist_ok=True)
+                ASSET_INFO_PATH.write_text(json.dumps(self.cache))
+
+    @staticmethod
+    def _post(session, body):
+        for _ in range(2):  # the first POST of a session only hands out the anti-CSRF token
+            try:
+                return roblox(session, "catalog", "POST", ROBLOX_CATALOG_URL, json=body).json()["data"]
+            except requests.HTTPError as e:
+                token = e.response.headers.get("x-csrf-token")
+                if e.response.status_code != 403 or not token:
+                    raise
+                session.headers["x-csrf-token"] = token
+        raise requests.RequestException("catalog refused the request")
+
+    def is_starter(self, avatar):
+        """True for the default skin, or an outfit of only free Roblox starter items (bacon hair, Paladin knight...).
+
+        Needs clothing or a whole free costume bundle (Junkbot), so a bare "noob"
+        body-color look is left for the AI, and a free limited-time event item
+        (auras, floating tomes) counts as a real choice.
+        Tuned on 625 rated avatars: catches 6 in 10 dislikes and none of the favorites.
+        """
+        items = [a for a in avatar["assets"] if a["assetType"]["id"] not in IGNORED_ASSET_TYPES]
+        clothed = any(a["assetType"]["id"] in CLOTHING_ASSET_TYPES for a in items)
+        if not clothed and avatar.get("defaultShirtApplied") and avatar.get("defaultPantsApplied"):
+            return True  # nothing worn, so Roblox puts on its logo tee: the "default skin"
+        bundles = {a["name"].split(" - ")[0] for a in items
+                   if a["assetType"]["id"] in BODY_ASSET_TYPES and " - " in a["name"]}
+        costume = any(a["assetType"]["id"] not in BODY_ASSET_TYPES and a["name"].split(" - ")[0] in bundles
+                      for a in items)
+        if not costume and not clothed:
+            return False
+        with self.lock:
+            for a in items:
+                if str(a["id"]) in RETIRED_STARTER_ASSETS:
+                    continue
+                info = self.cache.get(str(a["id"]))
+                if not info or not (info["roblox"] and info["free"]):
+                    return False
+                if info["offsale"] and a["assetType"]["id"] in EVENT_ASSET_TYPES:
+                    return False
+        return True
+
+
+def starter_looks(session, asset_info, user_ids):
+    """{user_id: True/False}; users whose outfit couldn't be read are left out."""
+    outfits = fetch_outfits(session, user_ids)
+    asset_info.fill(session, {a["id"] for avatar in outfits.values() for a in avatar["assets"]})
+    return {uid: asset_info.is_starter(avatar) for uid, avatar in outfits.items()}
 
 
 # --- Gemini -----------------------------------------------------------------
@@ -517,7 +634,9 @@ def rate_candidate(cand, action, reason, session, max_followers):
         raise ValueError("bad action")
 
     verdict = "liked" if action == "like" else "disliked"
-    entry = {"verdict": verdict, "time": int(time.time()), "source": "discovery"}
+    entry = {"verdict": verdict, "time": int(time.time()), "source": "discovery", "id": cand["id"]}
+    if cand.get("starter") is not None:
+        entry["starter"] = cand["starter"]
     info = {}
     folder = FEEDBACK_DIR / verdict
     folder.mkdir(parents=True, exist_ok=True)
@@ -551,6 +670,8 @@ class CandidateFeed:
         self.finished = False
         self.lock = threading.Lock()
         self.stop = threading.Event()
+        self.asset_info = AssetInfo()
+        self.skipped = 0  # starter outfits never shown
 
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
@@ -602,11 +723,16 @@ class CandidateFeed:
         random.shuffle(fresh)
         fresh = fresh[:30]
         self.handed.update(u["id"] for u in fresh)
+        # Starter outfits (bacon hair, the Paladin knight...) are skipped: you'd dislike them anyway.
+        starter = starter_looks(self.session, self.asset_info, [u["id"] for u in fresh])
+        self.skipped += sum(starter.values())
+        fresh = [u for u in fresh if not starter.get(u["id"])]
         images = fetch_avatar_images(self.session, [u["id"] for u in fresh])
         with self.lock:
             for u in fresh:
                 if u["id"] in images:
-                    self.ready.append({"id": u["id"], "name": u["name"], "image": images[u["id"]]})
+                    self.ready.append({"id": u["id"], "name": u["name"], "image": images[u["id"]],
+                                       "starter": starter.get(u["id"])})
 
     def take(self, n):
         """Hands out up to n avatars. Returns (names, done) - done means nothing more is coming."""
@@ -617,14 +743,42 @@ class CandidateFeed:
             return [i["name"] for i in items], (self.finished and not self.ready)
 
 
-def pick_examples(per_side=EXAMPLES_PER_SIDE):
-    """A random sample of rated avatars to show Gemini: {'liked': [bytes], 'disliked': [(bytes, reason)]}."""
+def tag_starter_ratings(session, names, feedback):
+    """Records in feedback.json which of these rated avatars wear a starter outfit (checked once each)."""
+    todo = [n for n in names if "starter" not in feedback[n]]
+    if not todo:
+        return
+    try:
+        users = {u["requestedUsername"]: u["id"] for u in roblox(
+            session, "usernames", "POST", ROBLOX_USERNAMES_URL,
+            json={"usernames": [n for n in todo if "id" not in feedback[n]], "excludeBannedUsers": True}
+        ).json().get("data", [])} if any("id" not in feedback[n] for n in todo) else {}
+    except (requests.RequestException, ValueError):
+        users = {}
+    ids = {n: feedback[n].get("id") or users.get(n) for n in todo}
+    starter = starter_looks(session, AssetInfo(), [i for i in ids.values() if i])
+    for name, user_id in ids.items():
+        if user_id in starter:
+            feedback[name].update(id=user_id, starter=starter[user_id])
+    save_feedback(feedback)
+
+
+def pick_examples(per_side=EXAMPLES_PER_SIDE, session=None):
+    """A random sample of rated avatars to show Gemini: {'liked': [bytes], 'disliked': [(bytes, reason)]}.
+
+    Starter outfits never reach Gemini (they're filtered out first), so with a session
+    the disliked examples are picked from the harder, non-starter dislikes.
+    """
     feedback = load_feedback()
     picked = {"liked": [], "disliked": []}
     for verdict, folder in (("liked", "liked"), ("disliked", "disliked")):
         names = [n for n, v in feedback.items()
                  if v.get("verdict") == verdict and (FEEDBACK_DIR / folder / f"{n}.png").is_file()]
         random.shuffle(names)
+        if verdict == "disliked" and session is not None:
+            names = [n for n in names if not feedback[n].get("starter")]
+            tag_starter_ratings(session, names[:per_side * 3], feedback)
+            names = [n for n in names if not feedback[n].get("starter")]
         for name in names[:per_side]:
             image = (FEEDBACK_DIR / folder / f"{name}.png").read_bytes()
             picked[verdict].append(image if verdict == "liked" else (image, feedback[name].get("reason")))
@@ -716,6 +870,7 @@ class AutoRun:
         self.args, self.session, self.seen, self.judge = args, session, seen, judge
         self.stats = Counter()
         self.handled = set()
+        self.asset_info = AssetInfo()
 
     def process(self, users, limit=None):
         """Judges and saves up to `limit` new candidates; returns how many were new."""
@@ -731,6 +886,13 @@ class AutoRun:
                 self.seen.add(user["id"])
             else:
                 candidates.append(user)
+
+        # Starter outfits are thrown out before the AI sees them (a failed lookup lets them through).
+        starter = starter_looks(self.session, self.asset_info, [u["id"] for u in candidates])
+        for user in [u for u in candidates if starter.get(u["id"])]:
+            self.stats["starter outfit, skipped before the AI"] += 1
+            self.seen.add(user["id"])
+        candidates = [u for u in candidates if not starter.get(u["id"])]
 
         images = fetch_avatar_images(self.session, [u["id"] for u in candidates])
         ready = [u for u in candidates if u["id"] in images]
@@ -831,7 +993,7 @@ def search_groups(run):
 
 
 def run_auto(args, session, seen, api_key):
-    examples = pick_examples()
+    examples = pick_examples(session=session)
     if examples["liked"] or examples["disliked"]:
         print(f"Using your ratings to match your taste "
               f"({len(examples['liked'])} perfect + {len(examples['disliked'])} disliked examples).\n")
@@ -1216,6 +1378,8 @@ def show_gallery(start="/", feed=None, session=None, max_followers=DEFAULT_SETTI
     finally:
         if feed is not None:
             feed.stop.set()
+            if feed.skipped:
+                print(f"Skipped {feed.skipped} starter outfit(s) you'd have disliked anyway.")
         server.shutdown()
         server.server_close()
 

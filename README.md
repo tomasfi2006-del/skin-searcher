@@ -34,9 +34,10 @@ has more followers than your limit (then it only counts as a taste example).
 Because these avatars are unfiltered, it also shows what the AI would wrongly
 have thrown away.
 
-Your ratings are used on every later search: each request to the AI includes a
-few avatars you rated Perfect and a few you Disliked (picked at random from all
-your ratings), plus your most common reasons for rejecting. So the more you
+Your ratings are used on every later search: each request to the AI includes
+six avatars you rated Perfect and six you Disliked (picked at random from all
+your ratings, skipping starter outfits since the AI never sees those), plus
+your most common reasons for rejecting. So the more you
 rate, the closer it gets to your taste. The menu shows your ratings and the
 "% kept" so you can watch it improve. The review page runs only on your own
 computer and stops when you press Enter in the menu window.
@@ -49,6 +50,29 @@ git clone it stashes any uncommitted changes, fast-forwards `main` (backing up
 any local commits first), and shows what's new. In a folder from a ZIP it
 downloads the newest ZIP and copies it over. Either way your `catalog/`
 folder is left untouched. (Its messages are in Portuguese.)
+
+## Your taste profile (from 625 Discover ratings)
+
+You kept 56 and disliked 569. Looking at all of them side by side:
+
+- **Loved:** goth/emo/grunge looks in black + white with real detail (chains,
+  fluffy hair, plaid, masks); anime cosplay (Akatsuki, JoJo); cute pastel/pink
+  girls; meme characters (a leaf with a face, the epic face, a Rabbid, a
+  pumpkin head, a noob with one funny hat, a huge muscle body); bold effects
+  like neon outlines, auras and floating books.
+- **Disliked:** mostly Roblox **starter outfits**: bacon hair ("Pal Hair") with
+  the blue-and-black motorcycle shirt, the red-beanie girl, fedora + aviator
+  guys, the gold Paladin knight, Junkbot, and the blank "default skin" with
+  Roblox's logo tee. Also "normal" realistic kids and plain black hoodies.
+
+That profile is written into the AI's instructions. On top of that, before
+the AI sees anyone, the script reads what each person is wearing from Roblox
+and **skips starter outfits**: the default skin, or an outfit made only of
+Roblox's free starter items or a free costume bundle (a free limited-time
+event item like an aura still counts as a real choice). On your ratings this
+throws out 332 of the 569 dislikes and none of your 56 favorites, so the AI's
+quota and your Discover time go to avatars that have a chance. Discover skips
+them too, and tells you how many when you close it.
 
 ## What this does
 
@@ -134,6 +158,10 @@ Ctrl+C anytime — progress is saved.
 - **Roblox user search is the limit in `--keywords` mode**: 1 search per
   minute, so every search asks for the maximum 100 results and the script
   judges one keyword's results while it waits for the next search.
+- **Outfit checks** (about 100/min, split over two Roblox endpoints) run
+  before the AI and usually throw out around half the people, so the AI's
+  60/min goes to better candidates. What each item is (who made it, its
+  price) is cached in `catalog/asset_info.json`.
 - **Follower counts** (100 lookups/min) are only checked for avatars Gemini
   already liked, so they don't slow anything down.
 - All Roblox calls follow Roblox's rate-limit headers, so they wait out a
