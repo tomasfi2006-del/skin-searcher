@@ -141,6 +141,7 @@ python catalog.py --gallery
 - `--usernames` — specific usernames you already picked
 - `--gallery` — review saved avatars in a grid: copy names, mark Perfect / Dislike
 - `--discover [words]` — rate fresh avatars from groups with the arrow keys
+- `--group-stats` — view yield performance and saved avatar rates per group
 - `--per-group` — new members to judge per group (default 300)
 - `--groups-per-term` — how many matching groups to use per search term (default 3)
 - `--per-keyword` — users to pull per keyword (default 100)
