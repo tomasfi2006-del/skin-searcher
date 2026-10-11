@@ -22,230 +22,706 @@ from skin_searcher.pipeline import CandidateFeed
 from skin_searcher.taste import feedback_stats, load_feedback, rate_avatar, rate_candidate
 
 GALLERY_TEMPLATE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en" class="h-full">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Skin Searcher</title>
-<style>
-:root{--bg:#f1f3f6;--card:#ffffff;--ink:#0f172a;--muted:#475569;--line:#e2e8f0;--accent:#4f46e5;--stage:#f8fafc;--good:#15803d;--good-bg:#dcfce7;--bad:#b91c1c;--bad-bg:#fee2e2;--tag-bg:#e2e8f0;--tag-ink:#334155;--size:210px}
-@media (prefers-color-scheme:dark){:root{--bg:#11141d;--card:#1c2230;--ink:#f8fafc;--muted:#94a3b8;--line:#2a3441;--accent:#818cf8;--stage:#161b26;--good:#4ade80;--good-bg:#064e3b;--bad:#f87171;--bad-bg:#7f1d1d;--tag-bg:#262f40;--tag-ink:#cbd5e1}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-header{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line)}
-h1{font-size:17px;font-weight:700;margin:0;letter-spacing:-0.01em}
-.count,.stats{color:var(--muted);font-size:13px}
-.tools{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-left:auto}
-input[type=search],select{font:inherit;font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);outline:none}
-input[type=search]:focus,select:focus{border-color:var(--accent)}
-input[type=search]{width:190px}
-label{display:flex;gap:6px;align-items:center;color:var(--muted);font-size:13px}
-.hint{padding:8px 20px;color:var(--muted);font-size:13px;background:var(--card);border-bottom:1px solid var(--line)}
-main{padding:20px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--size),1fr));gap:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;transition:transform 0.1s ease,box-shadow 0.1s ease}
-.card:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(0,0,0,0.06)}
-.card.liked{border-color:var(--good);box-shadow:0 0 0 1.5px var(--good)}
-.copy{display:block;width:100%;border:0;background:none;padding:0;text-align:left;color:inherit;font:inherit;cursor:pointer}
-.copy:hover .name{color:var(--accent)}
-.stage{background:var(--stage);aspect-ratio:1/1;position:relative}
-.stage img{width:100%;height:100%;object-fit:contain;display:block}
-.badges{position:absolute;top:6px;left:6px;right:6px;display:flex;gap:4px;flex-wrap:wrap;pointer-events:none}
-.badge{font-size:10px;font-weight:600;padding:2px 6px;border-radius:6px;background:var(--card);color:var(--ink);border:1px solid var(--line);backdrop-filter:blur(6px);opacity:0.92;text-transform:capitalize}
-.badge.score{background:var(--accent);color:#fff;border:none}
-.name{padding:8px 10px 4px;font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.meta-info{padding:0 10px 6px;color:var(--muted);font-size:11px;display:flex;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.actions{display:flex;gap:6px;padding:0 8px 8px;margin-top:auto}
-.act{flex:1;font:inherit;font-size:12px;font-weight:500;padding:6px 4px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);cursor:pointer}
-.act.love:hover,.card.liked .act.love{background:var(--good-bg);border-color:var(--good);color:var(--good)}
-.act.dis:hover{background:var(--bad-bg);border-color:var(--bad);color:var(--bad)}
-.empty{color:var(--muted);text-align:center;padding:60px 20px;font-size:15px}
-#bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:calc(100vw - 24px);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:14px;display:none;gap:8px 10px;align-items:center;flex-wrap:wrap;justify-content:center;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:100}
-#bar.show{display:flex}
-#bar button{font:inherit;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid currentColor;background:transparent;color:inherit;cursor:pointer}
-#bar button:hover{background:var(--bg);color:var(--ink)}
-</style></head><body>
-<header>
-<h1>Skin Searcher</h1><span class="count" id="count"></span><span class="stats" id="stats"></span>
-<a id="nav" href="#" hidden style="color:var(--accent);text-decoration:none;font-size:13px">Discover new avatars</a>
-<div class="tools">
-<input type="search" id="q" placeholder="Search name, color, theme" aria-label="Search">
-<select id="story" aria-label="Style"><option value="all">All Styles</option><option value="monochrome">Monochrome</option><option value="color_blocking">Color Blocking</option><option value="rainbow">Rainbow</option><option value="neon">Neon</option><option value="pastel">Pastel</option><option value="earthy">Earthy</option><option value="plain">Plain</option></select>
-<select id="show" aria-label="Show"><option value="all">Show all</option><option value="new">Not rated yet</option><option value="liked">Perfect only</option></select>
-<select id="sort" aria-label="Sort"><option value="new">Newest first</option><option value="score">Score</option><option value="az">A to Z</option></select>
-<label>Size <input type="range" id="size" min="120" max="380" value="210"></label>
-</div></header>
-<div class="hint" id="hint"></div>
-<main><div class="grid" id="grid"></div><div class="empty" id="empty" hidden></div></main>
-<div id="bar" role="status"></div>
+<title>Skin Searcher - Catalog</title>
+<script src="https://cdn.tailwindcss.com"></script>
 <script>
-const REVIEW=__REVIEW__, REASONS=__REASONS__, DISCOVER=__DISCOVER__;
-let AVATARS=__DATA__, STATS=__STATS__;
-const TOKEN=new URLSearchParams(location.search).get("t")||"";
-const $=id=>document.getElementById(id), grid=$("grid"), bar=$("bar");
+  tailwind.config = {
+    darkMode: 'media',
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+        }
+      }
+    }
+  }
+</script>
+<style>
+  :root { --card-size: 210px; }
+  .grid-dynamic { grid-template-columns: repeat(auto-fill, minmax(var(--card-size), 1fr)); }
+</style>
+</head>
+<body class="h-full bg-slate-100 dark:bg-[#11141d] text-slate-900 dark:text-slate-100 font-sans antialiased flex flex-col min-h-screen">
+
+<!-- Sticky Header -->
+<header class="sticky top-0 z-30 bg-white/95 dark:bg-[#1c2230]/95 backdrop-blur-md border-b border-slate-200 dark:border-[#2a3441] transition-colors">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+    <!-- Brand & Stats -->
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <span class="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-sm shadow-indigo-500/20">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
+        </span>
+        <h1 class="text-base sm:text-lg font-bold tracking-tight">Skin Searcher</h1>
+      </div>
+      <span id="count" class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"></span>
+      <span id="stats" class="hidden sm:inline-block px-2.5 py-0.5 text-xs font-medium rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60"></span>
+    </div>
+
+    <!-- Discover Button (if enabled) -->
+    <a id="nav" href="#" hidden class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm shadow-indigo-600/20 transition">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+      Discover New
+    </a>
+
+    <!-- Controls & Filters -->
+    <div class="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+      <!-- Search Input -->
+      <div class="relative flex-1 sm:w-56">
+        <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <input type="search" id="q" placeholder="Search name, color, theme..." class="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-[#2a3441] bg-slate-50 dark:bg-[#161b26] text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition">
+      </div>
+
+      <!-- Color Story Selector -->
+      <select id="story" aria-label="Style" class="py-1.5 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-[#2a3441] bg-slate-50 dark:bg-[#161b26] text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer">
+        <option value="all">All Styles</option>
+        <option value="monochrome">Monochrome</option>
+        <option value="color_blocking">Color Blocking</option>
+        <option value="rainbow">Rainbow</option>
+        <option value="neon">Neon</option>
+        <option value="pastel">Pastel</option>
+        <option value="earthy">Earthy</option>
+        <option value="plain">Plain</option>
+      </select>
+
+      <!-- Rating Filter -->
+      <select id="show" aria-label="Show" class="py-1.5 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-[#2a3441] bg-slate-50 dark:bg-[#161b26] text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer">
+        <option value="all">Show All</option>
+        <option value="new">Not Rated Yet</option>
+        <option value="liked">Perfect Only</option>
+      </select>
+
+      <!-- Sort Filter -->
+      <select id="sort" aria-label="Sort" class="py-1.5 px-2.5 text-xs rounded-xl border border-slate-200 dark:border-[#2a3441] bg-slate-50 dark:bg-[#161b26] text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer">
+        <option value="new">Newest First</option>
+        <option value="score">Highest Score</option>
+        <option value="az">A to Z</option>
+      </select>
+
+      <!-- Size Slider -->
+      <div class="hidden sm:flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 pl-1">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"/></svg>
+        <input type="range" id="size" min="140" max="360" value="210" class="w-20 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-600">
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- Hint Banner -->
+<div id="hint" class="bg-indigo-50/70 dark:bg-indigo-950/30 border-b border-indigo-100 dark:border-indigo-900/40 px-4 sm:px-6 py-2 text-xs text-indigo-900 dark:text-indigo-200">
+  <div class="max-w-7xl mx-auto flex items-center gap-2">
+    <svg class="w-4 h-4 text-indigo-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <span>Click any avatar to copy its username. Use <strong>Perfect</strong> or <strong>Dislike</strong> to teach your taste model.</span>
+  </div>
+</div>
+
+<!-- Main Gallery Content -->
+<main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
+  <div id="grid" class="grid grid-dynamic gap-4 sm:gap-5"></div>
+  <div id="empty" hidden class="py-20 text-center">
+    <div class="w-12 h-12 rounded-2xl bg-slate-200/60 dark:bg-slate-800 flex items-center justify-center mx-auto mb-3 text-slate-400">
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
+    </div>
+    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">No matching avatars found.</p>
+  </div>
+</main>
+
+<!-- Floating Toast Notification -->
+<div id="bar" role="status" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-slate-900/95 dark:bg-white/95 text-white dark:text-slate-900 shadow-xl border border-slate-800 dark:border-slate-200 backdrop-blur-md hidden items-center gap-3 text-xs sm:text-sm font-medium transition-all duration-200"></div>
+
+<script>
+const REVIEW = __REVIEW__, REASONS = __REASONS__, DISCOVER = __DISCOVER__;
+let AVATARS = __DATA__, STATS = __STATS__;
+const TOKEN = new URLSearchParams(location.search).get("t") || "";
+const $ = id => document.getElementById(id), grid = $("grid"), bar = $("bar");
 let barTimer;
-function say(text,buttons,ms){
-  bar.textContent="";const t=document.createElement("span");t.textContent=text;bar.appendChild(t);
-  for(const [label,fn] of buttons||[]){const b=document.createElement("button");b.textContent=label;b.onclick=fn;bar.appendChild(b)}
-  bar.classList.add("show");clearTimeout(barTimer);barTimer=setTimeout(()=>bar.classList.remove("show"),ms||2000)}
-function copy(name){
-  const done=()=>say("Copied "+name);
-  if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(name).then(done,()=>fallback(name,done))}else fallback(name,done)}
-function fallback(name,done){const t=document.createElement("textarea");t.value=name;t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();
-  try{document.execCommand("copy");done()}catch(e){say("Couldn't copy - select it by hand: "+name)}t.remove()}
-async function rate(name,action,reason){
-  const r=await fetch("/api/rate",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify({name,action,reason})});
-  if(!r.ok)throw new Error(await r.text());
-  STATS=(await r.json()).stats;showStats()}
-function showStats(){
-  const total=STATS.liked+STATS.disliked;
-  $("stats").textContent=total?("Rated "+total+": "+STATS.liked+" perfect, "+STATS.disliked+" disliked ("+Math.round(100*STATS.liked/total)+"% kept)"):""}
-async function love(a){
-  try{await rate(a.name,a.liked?"clear":"like");a.liked=!a.liked;render();say(a.liked?a.name+" marked perfect - AI learned!":"Rating removed")}
-  catch(e){say("Couldn't save - is window open?",[],3000)}}
-async function dislike(a){
-  try{await rate(a.name,"dislike")}catch(e){say("Couldn't save",[],3000);return}
-  AVATARS=AVATARS.filter(x=>x!==a);render();
-  const buttons=[["Undo",async()=>{try{await rate(a.name,"clear");a.liked=false;AVATARS.push(a);render();say("Restored "+a.name)}catch(e){say("Couldn't undo",[],3000)}}]];
-  for(const reason of REASONS)buttons.push([reason,async()=>{try{await rate(a.name,"reason",reason);say("Noted: "+reason)}catch(e){}}]);
-  say("Removed "+a.name+". Why?",buttons,8000)}
-function render(){
-  const q=$("q").value.trim().toLowerCase(),sort=$("sort").value,show=$("show").value,story=$("story").value;
-  const list=AVATARS.filter(a=>{
-    const matchQ=!q||a.name.toLowerCase().includes(q)||(a.theme&&a.theme.toLowerCase().includes(q))||(a.colors&&a.colors.some(c=>c.toLowerCase().includes(q)));
-    const matchShow=(show==="all"||(show==="liked"?a.liked:!a.liked));
-    const matchStory=(story==="all"||(a.story&&a.story.toLowerCase()===story.toLowerCase()));
-    return matchQ&&matchShow&&matchStory;
+
+function say(text, buttons, ms) {
+  bar.textContent = "";
+  const t = document.createElement("span");
+  t.textContent = text;
+  bar.appendChild(t);
+  for (const [label, fn] of buttons || []) {
+    const b = document.createElement("button");
+    b.className = "px-2.5 py-1 text-xs font-semibold rounded-lg bg-white/20 dark:bg-slate-900/20 hover:bg-white/30 dark:hover:bg-slate-900/30 transition cursor-pointer";
+    b.textContent = label;
+    b.onclick = fn;
+    bar.appendChild(b);
+  }
+  bar.classList.remove("hidden");
+  bar.classList.add("flex");
+  clearTimeout(barTimer);
+  barTimer = setTimeout(() => {
+    bar.classList.remove("flex");
+    bar.classList.add("hidden");
+  }, ms || 2500);
+}
+
+function copy(name) {
+  const done = () => say("Copied @" + name + " to clipboard");
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(name).then(done, () => fallback(name, done));
+  } else {
+    fallback(name, done);
+  }
+}
+
+function fallback(name, done) {
+  const t = document.createElement("textarea");
+  t.value = name;
+  t.style.position = "fixed";
+  t.style.opacity = "0";
+  document.body.appendChild(t);
+  t.select();
+  try { document.execCommand("copy"); done(); }
+  catch (e) { say("Couldn't copy: " + name); }
+  t.remove();
+}
+
+async function rate(name, action, reason) {
+  const r = await fetch("/api/rate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+    body: JSON.stringify({ name, action, reason })
   });
-  if(sort==="az")list.sort((a,b)=>a.name.localeCompare(b.name));
-  else if(sort==="score")list.sort((a,b)=>(b.score||0)-(a.score||0));
-  else list.sort((a,b)=>b.time-a.time);
-  grid.textContent="";
-  for(const a of list){
-    const c=document.createElement("div");c.className="card"+(a.liked?" liked":"");
-    const b=document.createElement("button");b.className="copy";b.title="Click to copy username";
-    const s=document.createElement("div");s.className="stage";
-    const i=document.createElement("img");i.loading="lazy";i.alt=a.name;i.src=a.file;s.appendChild(i);
-    const badges=document.createElement("div");badges.className="badges";
-    if(a.score) { const sb=document.createElement("span");sb.className="badge score";sb.textContent=a.score+"/10";badges.appendChild(sb); }
-    if(a.story&&a.story!=="plain") { const st=document.createElement("span");st.className="badge";st.textContent=a.story.replace("_"," ");badges.appendChild(st); }
-    if(a.theme) { const tb=document.createElement("span");tb.className="badge";tb.textContent=a.theme;badges.appendChild(tb); }
+  if (!r.ok) throw new Error(await r.text());
+  STATS = (await r.json()).stats;
+  showStats();
+}
+
+function showStats() {
+  const total = STATS.liked + STATS.disliked;
+  $("stats").textContent = total
+    ? ("Rated " + total + ": " + STATS.liked + " perfect, " + STATS.disliked + " disliked (" + Math.round(100 * STATS.liked / total) + "% kept)")
+    : "";
+}
+
+async function love(a) {
+  try {
+    await rate(a.name, a.liked ? "clear" : "like");
+    a.liked = !a.liked;
+    render();
+    say(a.liked ? "@" + a.name + " marked Perfect!" : "Rating removed");
+  } catch (e) {
+    say("Couldn't save rating", [], 3000);
+  }
+}
+
+async function dislike(a, reason, cardEl) {
+  try {
+    await rate(a.name, "dislike", reason);
+  } catch (e) {
+    say("Couldn't save rating", [], 3000);
+    return;
+  }
+  if (cardEl) {
+    cardEl.classList.add("opacity-0", "scale-95", "transition-all", "duration-200");
+  }
+  setTimeout(() => {
+    AVATARS = AVATARS.filter(x => x !== a);
+    render();
+  }, 180);
+
+  const undoBtn = [["Undo", async () => {
+    try {
+      await rate(a.name, "clear");
+      a.liked = false;
+      AVATARS.push(a);
+      render();
+      say("Restored @" + a.name);
+    } catch (e) {
+      say("Couldn't undo", [], 3000);
+    }
+  }]];
+
+  const reasonMsg = reason ? " (" + reason + ")" : "";
+  say("Disliked @" + a.name + reasonMsg, undoBtn, 6000);
+}
+
+function render() {
+  const q = $("q").value.trim().toLowerCase(), sort = $("sort").value, show = $("show").value, story = $("story").value;
+  const list = AVATARS.filter(a => {
+    const matchQ = !q || a.name.toLowerCase().includes(q) || (a.theme && a.theme.toLowerCase().includes(q)) || (a.colors && a.colors.some(c => c.toLowerCase().includes(q)));
+    const matchShow = (show === "all" || (show === "liked" ? a.liked : !a.liked));
+    const matchStory = (story === "all" || (a.story && a.story.toLowerCase() === story.toLowerCase()));
+    return matchQ && matchShow && matchStory;
+  });
+
+  if (sort === "az") list.sort((a, b) => a.name.localeCompare(b.name));
+  else if (sort === "score") list.sort((a, b) => (b.score || 0) - (a.score || 0));
+  else list.sort((a, b) => b.time - a.time);
+
+  grid.textContent = "";
+  for (const a of list) {
+    const c = document.createElement("div");
+    c.className = "group relative flex flex-col bg-white dark:bg-[#1c2230] border border-slate-200 dark:border-[#2a3441] rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200" + (a.liked ? " ring-2 ring-emerald-500/90 dark:ring-emerald-400 border-transparent" : "");
+
+    // Copy username button wrapper
+    const b = document.createElement("button");
+    b.className = "w-full text-left bg-transparent border-0 p-0 cursor-pointer block focus:outline-none";
+    b.title = "Click to copy @" + a.name;
+
+    // Image Stage
+    const s = document.createElement("div");
+    s.className = "relative aspect-square w-full bg-slate-50 dark:bg-[#161b26] flex items-center justify-center p-2.5 overflow-hidden";
+
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = a.name;
+    img.src = a.file;
+    img.className = "w-full h-full object-contain transform group-hover:scale-105 transition-transform duration-200";
+    s.appendChild(img);
+
+    // Badges Container
+    const badges = document.createElement("div");
+    badges.className = "absolute top-2 left-2 right-2 flex flex-wrap gap-1 pointer-events-none";
+
+    if (a.score) {
+      const sb = document.createElement("span");
+      sb.className = "px-2 py-0.5 text-[10px] font-bold rounded-lg bg-indigo-600 text-white shadow-sm";
+      sb.textContent = a.score + "/10";
+      badges.appendChild(sb);
+    }
+    if (a.story && a.story !== "plain") {
+      const st = document.createElement("span");
+      st.className = "px-1.5 py-0.5 text-[10px] font-semibold rounded-md bg-black/60 text-white backdrop-blur-sm capitalize";
+      st.textContent = a.story.replace("_", " ");
+      badges.appendChild(st);
+    }
+    if (a.theme) {
+      const tb = document.createElement("span");
+      tb.className = "px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-slate-800/70 text-slate-200 backdrop-blur-sm truncate max-w-[110px]";
+      tb.textContent = a.theme;
+      badges.appendChild(tb);
+    }
     s.appendChild(badges);
-    const n=document.createElement("div");n.className="name";n.textContent=a.name;
-    const mi=document.createElement("div");mi.className="meta-info";
-    if(a.colors&&a.colors.length) mi.textContent=a.colors.join(", ");
-    b.append(s,n,mi);b.addEventListener("click",()=>copy(a.name));c.appendChild(b);
-    if(REVIEW){
-      const r=document.createElement("div");r.className="actions";
-      const l=document.createElement("button");l.className="act love";l.textContent=a.liked?"Perfect \\u2713":"Perfect";l.onclick=()=>love(a);
-      const d=document.createElement("button");d.className="act dis";d.textContent="Dislike";d.onclick=()=>dislike(a);
-      r.append(l,d);c.appendChild(r)}
-    grid.appendChild(c)}
-  $("count").textContent=list.length===AVATARS.length?AVATARS.length+" avatars":list.length+" of "+AVATARS.length+" avatars";
-  $("empty").hidden=list.length>0;
-  $("empty").textContent=AVATARS.length?"No matching avatars.":"No avatars yet. Run a search to populate.";}
-$("nav").hidden=!DISCOVER;$("nav").href="/discover?t="+encodeURIComponent(TOKEN);
-$("hint").hidden=!REVIEW;
-$("hint").textContent="Click an avatar to copy its username. Use filters above to sort by color story (Monochrome, Neon, etc.) or theme.";
-for(const id of ["q","sort","show","story"])$(id).addEventListener(id==="q"?"input":"change",render);
-$("size").addEventListener("input",e=>document.documentElement.style.setProperty("--size",e.target.value+"px"));
-showStats();render();
-</script></body></html>
+
+    // Copy hover indicator
+    const copyBadge = document.createElement("div");
+    copyBadge.className = "absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/70 text-white text-[10px] font-medium px-2 py-0.5 rounded-md backdrop-blur-sm flex items-center gap-1 pointer-events-none";
+    copyBadge.innerHTML = `<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>Copy`;
+    s.appendChild(copyBadge);
+
+    // Info area
+    const info = document.createElement("div");
+    info.className = "p-3 pb-2";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "font-semibold text-xs sm:text-sm text-slate-800 dark:text-slate-100 truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors";
+    nameEl.textContent = a.name;
+
+    const metaEl = document.createElement("div");
+    metaEl.className = "text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate";
+    metaEl.textContent = a.colors && a.colors.length ? a.colors.join(", ") : "\u00a0";
+
+    info.append(nameEl, metaEl);
+    b.append(s, info);
+    b.addEventListener("click", () => copy(a.name));
+    c.appendChild(b);
+
+    // Actions & Reasons (only when REVIEW is active)
+    if (REVIEW) {
+      const actionsWrap = document.createElement("div");
+      actionsWrap.className = "p-2.5 pt-0 mt-auto border-t border-slate-100 dark:border-[#2a3441]/60";
+
+      // 1. Primary Action Buttons
+      const mainActions = document.createElement("div");
+      mainActions.className = "flex gap-2 pt-2";
+
+      // Perfect Button
+      const l = document.createElement("button");
+      l.type = "button";
+      l.className = a.liked
+        ? "flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-semibold rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition"
+        : "flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 border border-slate-200 dark:border-slate-700 transition";
+
+      l.innerHTML = a.liked
+        ? `<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg><span>Perfect</span>`
+        : `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg><span>Perfect</span>`;
+      l.onclick = () => love(a);
+
+      // Dislike Button (opens reason drawer)
+      const d = document.createElement("button");
+      d.type = "button";
+      d.className = "flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 dark:hover:bg-rose-950/40 dark:hover:text-rose-300 border border-slate-200 dark:border-slate-700 transition";
+      d.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h7.528a2 2 0 011.789 1.106l1.5 3A2 2 0 0119.553 9H16v5m-6 0v7m0-7l4 4m2-11h4a2 2 0 012 2v5a2 2 0 01-2 2h-4"/></svg><span>Dislike</span>`;
+
+      // 2. Reason Selection Drawer
+      const reasonBox = document.createElement("div");
+      reasonBox.className = "hidden pt-2 flex flex-col gap-1.5";
+
+      const reasonHeader = document.createElement("div");
+      reasonHeader.className = "flex items-center justify-between text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-0.5";
+      reasonHeader.innerHTML = `<span>Why dislike?</span>`;
+
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs px-1";
+      closeBtn.textContent = "✕";
+      closeBtn.onclick = () => {
+        reasonBox.classList.add("hidden");
+        mainActions.classList.remove("hidden");
+      };
+      reasonHeader.appendChild(closeBtn);
+      reasonBox.appendChild(reasonHeader);
+
+      const reasonsGrid = document.createElement("div");
+      reasonsGrid.className = "grid grid-cols-2 gap-1";
+
+      for (const rText of REASONS) {
+        const rb = document.createElement("button");
+        rb.type = "button";
+        rb.className = "text-left text-[11px] py-1 px-1.5 rounded-lg bg-rose-50/70 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border border-rose-200/70 dark:border-rose-900/60 hover:bg-rose-100 dark:hover:bg-rose-900/60 transition truncate";
+        rb.title = rText;
+        rb.textContent = rText;
+        rb.onclick = () => dislike(a, rText, c);
+        reasonsGrid.appendChild(rb);
+      }
+      reasonBox.appendChild(reasonsGrid);
+
+      const skipBtn = document.createElement("button");
+      skipBtn.type = "button";
+      skipBtn.className = "text-center text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 pt-0.5";
+      skipBtn.textContent = "Skip reason / Dislike anyway";
+      skipBtn.onclick = () => dislike(a, null, c);
+      reasonBox.appendChild(skipBtn);
+
+      d.onclick = () => {
+        mainActions.classList.add("hidden");
+        reasonBox.classList.remove("hidden");
+      };
+
+      mainActions.append(l, d);
+      actionsWrap.append(mainActions, reasonBox);
+      c.appendChild(actionsWrap);
+    }
+
+    grid.appendChild(c);
+  }
+
+  $("count").textContent = list.length === AVATARS.length
+    ? AVATARS.length + " avatars"
+    : list.length + " of " + AVATARS.length + " avatars";
+  $("empty").hidden = list.length > 0;
+}
+
+$("nav").hidden = !DISCOVER;
+$("nav").href = "/discover?t=" + encodeURIComponent(TOKEN);
+$("hint").hidden = !REVIEW;
+
+for (const id of ["q", "sort", "show", "story"]) {
+  $(id).addEventListener(id === "q" ? "input" : "change", render);
+}
+
+$("size").addEventListener("input", e => {
+  document.documentElement.style.setProperty("--card-size", e.target.value + "px");
+});
+
+showStats();
+render();
+</script>
+</body>
+</html>
 """
 
 DISCOVER_TEMPLATE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en" class="h-full">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Skin Searcher - Discover</title>
-<style>
-:root{--bg:#f1f3f6;--card:#ffffff;--ink:#0f172a;--muted:#475569;--line:#e2e8f0;--accent:#4f46e5;--stage:#f8fafc;--good:#15803d;--good-bg:#dcfce7;--bad:#b91c1c;--bad-bg:#fee2e2}
-@media (prefers-color-scheme:dark){:root{--bg:#11141d;--card:#1c2230;--ink:#f8fafc;--muted:#94a3b8;--line:#2a3441;--accent:#818cf8;--stage:#161b26;--good:#4ade80;--good-bg:#064e3b;--bad:#f87171;--bad-bg:#7f1d1d}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-header{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line)}
-h1{font-size:17px;font-weight:700;margin:0}.muted{color:var(--muted);font-size:13px}
-header a{margin-left:auto;color:var(--accent);text-decoration:none;font-size:13px;font-weight:500}
-main{max-width:480px;margin:20px auto;padding:0 16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 6px 18px rgba(0,0,0,0.04)}
-.stage{background:var(--stage);aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;color:var(--muted)}
-.stage img{width:100%;height:100%;object-fit:contain;display:block}
-.name{padding:12px 14px;font-weight:600;font-size:16px;text-align:center}
-.row{display:flex;gap:10px;margin-top:14px}
-.btn{flex:1;font:inherit;font-weight:500;padding:12px 8px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);cursor:pointer;font-size:14px}
-.btn small{display:block;color:var(--muted);font-size:11px;font-weight:normal;margin-top:2px}
-.btn.dis:hover{background:var(--bad-bg);border-color:var(--bad);color:var(--bad)}.btn.love:hover{background:var(--good-bg);border-color:var(--good);color:var(--good)}
-.btn:hover small{color:inherit}.btn.skip{flex:.6}
-.hint{color:var(--muted);font-size:12.5px;text-align:center;margin-top:14px;line-height:1.5}
-#bar{margin-top:12px;min-height:32px;text-align:center;font-size:13px}
-#bar button{font:inherit;font-size:12px;margin:2px 3px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
-</style></head><body>
-<header><h1>Discover</h1><span class="muted" id="stats"></span><a id="nav" href="#">Review saved avatars</a></header>
-<main>
-<div class="card"><div class="stage" id="stage">Finding avatars...</div><div class="name" id="name">&nbsp;</div></div>
-<div class="row">
-<button class="btn dis" id="dis">Dislike<small>Left arrow</small></button>
-<button class="btn skip" id="skip">Skip<small>Down arrow</small></button>
-<button class="btn love" id="love">Perfect<small>Right arrow</small></button>
-</div>
-<div id="bar" role="status"></div>
-<div class="hint">Keys: left = dislike, right = perfect, down = skip, Z = undo, 1-3 = why you disliked it.<br>Perfect ones are saved to your catalog. Everything you rate teaches the AI.</div>
-</main>
+<script src="https://cdn.tailwindcss.com"></script>
 <script>
-const REASONS=__REASONS__;let STATS=__STATS__;
-const TOKEN=new URLSearchParams(location.search).get("t")||"";
-const $=id=>document.getElementById(id);
-let queue=[],current=null,last=null,exhausted=false,fetching=false,busy=false,me={liked:0,disliked:0},barTimer;
-$("nav").href="/?t="+encodeURIComponent(TOKEN);
-async function api(path,body){
-  const r=await fetch(path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:body?JSON.stringify(body):undefined});
-  if(!r.ok)throw new Error(await r.text());return r.json()}
-function bar(text,buttons,ms){
-  const b=$("bar");b.textContent=text+" ";
-  for(const [label,fn] of buttons||[]){const x=document.createElement("button");x.textContent=label;x.onclick=fn;b.appendChild(x)}
-  clearTimeout(barTimer);if(ms)barTimer=setTimeout(()=>b.textContent="",ms)}
-function showStats(){
-  const t=STATS.liked+STATS.disliked;
-  $("stats").textContent="This session: "+(me.liked+me.disliked)+" rated"+(t?" | All time: "+STATS.liked+" perfect, "+STATS.disliked+" disliked ("+Math.round(100*STATS.liked/t)+"% kept)":"")}
-async function refill(){
-  if(fetching||exhausted||queue.length>=6)return;fetching=true;let got=0;
-  try{const r=await api("/api/next?n=6");queue.push(...r.names);got=r.names.length;exhausted=r.done;if(!current)advance()}
-  catch(e){bar("Lost connection - is window open?")}
-  fetching=false;if(!exhausted&&queue.length<6)setTimeout(refill,got?150:1200)}
-function advance(){
-  current=queue.shift()||null;render();
-  for(const n of queue.slice(0,3)){const i=new Image();i.src="/candidate/"+n+".png"}
-  if(queue.length<4)refill()}
-function render(){
-  const stage=$("stage");stage.textContent="";
-  if(current){const i=document.createElement("img");i.src="/candidate/"+current+".png";i.alt=current;stage.appendChild(i);$("name").textContent=current}
-  else{stage.textContent=exhausted?"No more new avatars from these groups.":"Finding avatars...";$("name").innerHTML="&nbsp;"}
-  showStats()}
-async function rate(action){
-  if(!current||busy)return;busy=true;const name=current;
-  try{
-    const r=await api("/api/discover-rate",{name,action});STATS=r.stats;last={name,action};
-    if(action==="like"){me.liked++;bar(r.info.saved?"Saved "+name+" to catalog.":"Noted - "+name+" has "+(r.info.followers==null?"unknown":r.info.followers.toLocaleString())+" followers, so wasn't saved.",[],3500)}
-    else{me.disliked++;bar("Why?",REASONS.map((x,i)=>[(i+1)+" "+x,()=>tag(i)]),6000)}
-    advance()}
-  catch(e){bar("Couldn't save - is window open?")}
-  busy=false}
-async function tag(i){
-  if(!last||last.action!=="dislike")return;
-  try{await api("/api/discover-rate",{name:last.name,action:"reason",reason:REASONS[i]});bar("Noted: "+REASONS[i],[],1800)}catch(e){}}
-function skip(){if(current){last=null;advance()}}
-async function undo(){
-  if(!last||busy)return;busy=true;const l=last;
-  try{const r=await api("/api/discover-rate",{name:l.name,action:"undo"});STATS=r.stats;
-    if(l.action==="like")me.liked--;else me.disliked--;
-    if(current)queue.unshift(current);current=l.name;last=null;render();bar("Undone.",[],1200)}
-  catch(e){bar("Couldn't undo")}
-  busy=false}
-$("dis").onclick=()=>rate("dislike");$("love").onclick=()=>rate("like");$("skip").onclick=skip;
-document.addEventListener("keydown",e=>{
-  if(e.metaKey||e.ctrlKey||e.altKey)return;const k=e.key.toLowerCase();
-  if(k==="arrowleft"||k==="a")rate("dislike");else if(k==="arrowright"||k==="d")rate("like");
-  else if(k==="arrowdown"||k==="s"||k===" "){e.preventDefault();skip()}
-  else if(k==="z"||k==="backspace")undo();else if(k>="1"&&k<="3")tag(Number(k)-1)});
-showStats();refill();
-</script></body></html>
+  tailwind.config = {
+    darkMode: 'media',
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+        }
+      }
+    }
+  }
+</script>
+</head>
+<body class="h-full bg-slate-100 dark:bg-[#11141d] text-slate-900 dark:text-slate-100 font-sans antialiased flex flex-col min-h-screen">
+
+<!-- Sticky Header -->
+<header class="sticky top-0 z-30 bg-white/95 dark:bg-[#1c2230]/95 backdrop-blur-md border-b border-slate-200 dark:border-[#2a3441] transition-colors">
+  <div class="max-w-4xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <span class="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-sm shadow-indigo-500/20">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        </span>
+        <h1 class="text-base sm:text-lg font-bold tracking-tight">Discover</h1>
+      </div>
+      <span id="stats" class="text-xs text-slate-500 dark:text-slate-400"></span>
+    </div>
+    <a id="nav" href="#" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+      Saved Catalog
+    </a>
+  </div>
+</header>
+
+<!-- Main Stage Container -->
+<main class="flex-1 max-w-md w-full mx-auto px-4 py-6 flex flex-col justify-center">
+  <!-- Candidate Card -->
+  <div class="bg-white dark:bg-[#1c2230] border border-slate-200 dark:border-[#2a3441] rounded-3xl overflow-hidden shadow-sm">
+    <div id="stage" class="aspect-square w-full bg-slate-50 dark:bg-[#161b26] flex items-center justify-center p-6 text-sm text-slate-400 font-medium">
+      Finding avatars...
+    </div>
+    <div class="p-3 text-center border-t border-slate-100 dark:border-[#2a3441]/60">
+      <div id="name" class="font-bold text-base sm:text-lg text-slate-800 dark:text-slate-100 tracking-tight">&nbsp;</div>
+    </div>
+  </div>
+
+  <!-- Primary Action Controls -->
+  <div class="grid grid-cols-3 gap-2.5 mt-4">
+    <!-- Dislike Button -->
+    <button id="dis" class="flex flex-col items-center justify-center py-2.5 px-2 rounded-2xl bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900 transition cursor-pointer group">
+      <div class="flex items-center gap-1.5 font-semibold text-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h7.528a2 2 0 011.789 1.106l1.5 3A2 2 0 0119.553 9H16v5m-6 0v7m0-7l4 4m2-11h4a2 2 0 012 2v5a2 2 0 01-2 2h-4"/></svg>
+        <span>Dislike</span>
+      </div>
+      <span class="text-[10px] text-rose-500/80 dark:text-rose-400/80 font-normal mt-0.5">← or A</span>
+    </button>
+
+    <!-- Skip Button -->
+    <button id="skip" class="flex flex-col items-center justify-center py-2.5 px-2 rounded-2xl bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 transition cursor-pointer group">
+      <div class="flex items-center gap-1.5 font-semibold text-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
+        <span>Skip</span>
+      </div>
+      <span class="text-[10px] text-slate-500 dark:text-slate-400 font-normal mt-0.5">↓ or Space</span>
+    </button>
+
+    <!-- Perfect Button -->
+    <button id="love" class="flex flex-col items-center justify-center py-2.5 px-2 rounded-2xl bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm shadow-emerald-600/20 transition cursor-pointer group">
+      <div class="flex items-center gap-1.5 font-semibold text-sm">
+        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+        <span>Perfect</span>
+      </div>
+      <span class="text-[10px] text-emerald-100 font-normal mt-0.5">→ or D</span>
+    </button>
+  </div>
+
+  <!-- 1-Click Dislike Reasons -->
+  <div class="mt-4 p-3 rounded-2xl bg-white dark:bg-[#1c2230] border border-slate-200 dark:border-[#2a3441]">
+    <div class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-2 flex items-center justify-between">
+      <span>1-Click Dislike with Reason</span>
+      <span class="text-[10px] font-normal text-slate-400">Keys 1 - 4</span>
+    </div>
+    <div id="reasons-grid" class="grid grid-cols-2 gap-1.5"></div>
+  </div>
+
+  <!-- Status & Feedback Area -->
+  <div id="bar" role="status" class="mt-3 min-h-[36px] flex items-center justify-center gap-2 text-xs text-center text-slate-600 dark:text-slate-300"></div>
+
+  <!-- Shortcuts Bar -->
+  <div class="mt-2 text-center text-[11px] text-slate-400 dark:text-slate-500">
+    <span>Keys: <strong>←/A</strong> Dislike &bull; <strong>1-4</strong> Reason &bull; <strong>↓/Space</strong> Skip &bull; <strong>→/D</strong> Perfect &bull; <strong>Z</strong> Undo</span>
+  </div>
+</main>
+
+<script>
+const REASONS = __REASONS__;
+let STATS = __STATS__;
+const TOKEN = new URLSearchParams(location.search).get("t") || "";
+const $ = id => document.getElementById(id);
+let queue = [], current = null, last = null, exhausted = false, fetching = false, busy = false, me = { liked: 0, disliked: 0 }, barTimer;
+
+$("nav").href = "/?t=" + encodeURIComponent(TOKEN);
+
+// Build 1-click Reason Buttons
+const rGrid = $("reasons-grid");
+for (let i = 0; i < REASONS.length; i++) {
+  const rText = REASONS[i];
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "inline-flex items-center gap-1.5 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-[#161b26] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-700 dark:text-slate-200 hover:text-rose-700 dark:hover:text-rose-300 border border-slate-200 dark:border-[#2a3441] hover:border-rose-200 dark:hover:border-rose-900/60 transition group text-left cursor-pointer";
+  btn.innerHTML = `<span class="w-4 h-4 rounded-md bg-slate-200/80 dark:bg-slate-700 group-hover:bg-rose-200/80 dark:group-hover:bg-rose-900/80 text-[10px] font-bold flex items-center justify-center shrink-0">${i + 1}</span><span class="truncate">${rText}</span>`;
+  btn.onclick = () => rateWithReason(i);
+  rGrid.appendChild(btn);
+}
+
+async function api(path, body) {
+  const r = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+function bar(text, buttons, ms) {
+  const b = $("bar");
+  b.textContent = text + " ";
+  for (const [label, fn] of buttons || []) {
+    const x = document.createElement("button");
+    x.className = "ml-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-300 dark:hover:bg-slate-600 transition cursor-pointer";
+    x.textContent = label;
+    x.onclick = fn;
+    b.appendChild(x);
+  }
+  clearTimeout(barTimer);
+  if (ms) barTimer = setTimeout(() => b.textContent = "", ms);
+}
+
+function showStats() {
+  const t = STATS.liked + STATS.disliked;
+  $("stats").textContent = "Session: " + (me.liked + me.disliked) + " rated" + (t ? " \u2022 All time: " + STATS.liked + " perfect, " + STATS.disliked + " disliked (" + Math.round(100 * STATS.liked / t) + "% kept)" : "");
+}
+
+async function refill() {
+  if (fetching || exhausted || queue.length >= 6) return;
+  fetching = true;
+  let got = 0;
+  try {
+    const r = await api("/api/next?n=6");
+    queue.push(...r.names);
+    got = r.names.length;
+    exhausted = r.done;
+    if (!current) advance();
+  } catch (e) {
+    bar("Lost connection - is window open?");
+  }
+  fetching = false;
+  if (!exhausted && queue.length < 6) setTimeout(refill, got ? 150 : 1200);
+}
+
+function advance() {
+  current = queue.shift() || null;
+  render();
+  for (const n of queue.slice(0, 3)) {
+    const i = new Image();
+    i.src = "/candidate/" + n + ".png";
+  }
+  if (queue.length < 4) refill();
+}
+
+function render() {
+  const stage = $("stage");
+  stage.textContent = "";
+  if (current) {
+    const i = document.createElement("img");
+    i.src = "/candidate/" + current + ".png";
+    i.alt = current;
+    i.className = "w-full h-full object-contain";
+    stage.appendChild(i);
+    $("name").textContent = "@" + current;
+  } else {
+    stage.textContent = exhausted ? "No more new avatars from these groups." : "Finding avatars...";
+    $("name").innerHTML = "&nbsp;";
+  }
+  showStats();
+}
+
+async function rate(action) {
+  if (!current || busy) return;
+  busy = true;
+  const name = current;
+  try {
+    const r = await api("/api/discover-rate", { name, action });
+    STATS = r.stats;
+    last = { name, action, time: Date.now() };
+    if (action === "like") {
+      me.liked++;
+      const msg = r.info.saved
+        ? "Saved @" + name + " to catalog!"
+        : "@" + name + " has " + (r.info.followers == null ? "unknown" : r.info.followers.toLocaleString()) + " followers (not saved).";
+      bar(msg, [["Undo (Z)", undo]], 4000);
+    } else {
+      me.disliked++;
+      bar("Disliked @" + name, [["Undo (Z)", undo]], 5000);
+    }
+    advance();
+  } catch (e) {
+    bar("Couldn't save rating");
+  }
+  busy = false;
+}
+
+async function rateWithReason(idx) {
+  const reason = REASONS[idx];
+  // If user just disliked and wants to tag last
+  if (last && last.action === "dislike" && !last.reason && (Date.now() - last.time < 5000)) {
+    try {
+      await api("/api/discover-rate", { name: last.name, action: "reason", reason });
+      last.reason = reason;
+      bar("Tagged @" + last.name + " as " + reason, [["Undo (Z)", undo]], 3000);
+    } catch (e) {}
+    return;
+  }
+  // Otherwise directly rate current avatar with reason
+  if (!current || busy) return;
+  busy = true;
+  const name = current;
+  try {
+    const r = await api("/api/discover-rate", { name, action: "dislike", reason });
+    STATS = r.stats;
+    last = { name, action: "dislike", reason, time: Date.now() };
+    me.disliked++;
+    bar("Disliked @" + name + " (" + reason + ")", [["Undo (Z)", undo]], 5000);
+    advance();
+  } catch (e) {
+    bar("Couldn't save rating");
+  }
+  busy = false;
+}
+
+function skip() {
+  if (current) {
+    last = null;
+    advance();
+  }
+}
+
+async function undo() {
+  if (!last || busy) return;
+  busy = true;
+  const l = last;
+  try {
+    const r = await api("/api/discover-rate", { name: l.name, action: "undo" });
+    STATS = r.stats;
+    if (l.action === "like") me.liked--;
+    else me.disliked--;
+    if (current) queue.unshift(current);
+    current = l.name;
+    last = null;
+    render();
+    bar("Undone.", [], 1500);
+  } catch (e) {
+    bar("Couldn't undo");
+  }
+  busy = false;
+}
+
+$("dis").onclick = () => rate("dislike");
+$("love").onclick = () => rate("like");
+$("skip").onclick = skip;
+
+document.addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "arrowleft" || k === "a") rate("dislike");
+  else if (k === "arrowright" || k === "d") rate("like");
+  else if (k === "arrowdown" || k === "s" || k === " ") { e.preventDefault(); skip(); }
+  else if (k === "z" || k === "backspace") undo();
+  else if (k >= "1" && k <= String(REASONS.length)) rateWithReason(Number(k) - 1);
+});
+
+showStats();
+refill();
+</script>
+</body>
+</html>
 """
 
 
