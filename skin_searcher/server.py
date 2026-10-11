@@ -15,6 +15,7 @@ from skin_searcher.config import (
     DEFAULT_SETTINGS,
     DISLIKE_REASONS,
     GALLERY_PATH,
+    LIKE_REASONS,
     OUTPUT_DIR,
     load_metadata,
 )
@@ -134,7 +135,7 @@ GALLERY_TEMPLATE = """<!doctype html>
 <div id="bar" role="status" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-slate-900/95 dark:bg-white/95 text-white dark:text-slate-900 shadow-xl border border-slate-800 dark:border-slate-200 backdrop-blur-md hidden items-center gap-3 text-xs sm:text-sm font-medium transition-all duration-200"></div>
 
 <script>
-const REVIEW = __REVIEW__, REASONS = __REASONS__, DISCOVER = __DISCOVER__;
+const REVIEW = __REVIEW__, REASONS = __REASONS__, LIKE_REASONS = __LIKE_REASONS__, DISCOVER = __DISCOVER__;
 let AVATARS = __DATA__, STATS = __STATS__;
 const TOKEN = new URLSearchParams(location.search).get("t") || "";
 const $ = id => document.getElementById(id), grid = $("grid"), bar = $("bar");
@@ -200,12 +201,20 @@ function showStats() {
     : "";
 }
 
-async function love(a) {
+async function love(a, reason) {
   try {
-    await rate(a.name, a.liked ? "clear" : "like");
-    a.liked = !a.liked;
+    const action = (a.liked && !reason) ? "clear" : "like";
+    await rate(a.name, action, reason);
+    if (action === "clear") {
+      a.liked = false;
+      a.reason = "";
+      say("Rating removed for @" + a.name);
+    } else {
+      a.liked = true;
+      if (reason) a.reason = reason;
+      say(reason ? "@" + a.name + " marked Perfect! (" + reason + ")" : "@" + a.name + " marked Perfect!");
+    }
     render();
-    say(a.liked ? "@" + a.name + " marked Perfect!" : "Rating removed");
   } catch (e) {
     say("Couldn't save rating", [], 3000);
   }
@@ -286,6 +295,12 @@ function render() {
       sb.textContent = a.score + "/10";
       badges.appendChild(sb);
     }
+    if (a.liked && a.reason) {
+      const lr = document.createElement("span");
+      lr.className = "px-1.5 py-0.5 text-[10px] font-semibold rounded-md bg-emerald-600 text-white shadow-sm truncate max-w-[120px]";
+      lr.textContent = "★ " + a.reason;
+      badges.appendChild(lr);
+    }
     if (a.story && a.story !== "plain") {
       const st = document.createElement("span");
       st.className = "px-1.5 py-0.5 text-[10px] font-semibold rounded-md bg-black/60 text-white backdrop-blur-sm capitalize";
@@ -330,32 +345,83 @@ function render() {
 
       // 1. Primary Action Buttons
       const mainActions = document.createElement("div");
-      mainActions.className = "flex gap-2 pt-2";
+      mainActions.className = "flex gap-1.5 pt-2";
 
-      // Perfect Button
+      // Perfect Button Group
+      const lWrap = document.createElement("div");
+      lWrap.className = "flex-1 flex gap-1";
+
       const l = document.createElement("button");
       l.type = "button";
       l.className = a.liked
-        ? "flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-semibold rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition"
-        : "flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 border border-slate-200 dark:border-slate-700 transition";
+        ? "flex-1 inline-flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-semibold rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition"
+        : "flex-1 inline-flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 border border-slate-200 dark:border-slate-700 transition";
 
       l.innerHTML = a.liked
-        ? `<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg><span>Perfect</span>`
-        : `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg><span>Perfect</span>`;
+        ? `<svg class="w-3.5 h-3.5 fill-current shrink-0" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg><span class="truncate">Perfect</span>`
+        : `<svg class="w-3.5 h-3.5 stroke-current fill-none shrink-0" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg><span class="truncate">Perfect</span>`;
       l.onclick = () => love(a);
+
+      const lTag = document.createElement("button");
+      lTag.type = "button";
+      lTag.className = "px-2 py-1.5 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 border border-slate-200 dark:border-slate-700 transition" + (a.liked && a.reason ? " text-emerald-600 dark:text-emerald-400 font-bold" : "");
+      lTag.title = "Select reason why you like this avatar";
+      lTag.textContent = "★";
+
+      lWrap.append(l, lTag);
 
       // Dislike Button (opens reason drawer)
       const d = document.createElement("button");
       d.type = "button";
-      d.className = "flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 dark:hover:bg-rose-950/40 dark:hover:text-rose-300 border border-slate-200 dark:border-slate-700 transition";
-      d.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h7.528a2 2 0 011.789 1.106l1.5 3A2 2 0 0119.553 9H16v5m-6 0v7m0-7l4 4m2-11h4a2 2 0 012 2v5a2 2 0 01-2 2h-4"/></svg><span>Dislike</span>`;
+      d.className = "flex-1 inline-flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 dark:hover:bg-rose-950/40 dark:hover:text-rose-300 border border-slate-200 dark:border-slate-700 transition";
+      d.innerHTML = `<svg class="w-3.5 h-3.5 stroke-current fill-none shrink-0" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h7.528a2 2 0 011.789 1.106l1.5 3A2 2 0 0119.553 9H16v5m-6 0v7m0-7l4 4m2-11h4a2 2 0 012 2v5a2 2 0 01-2 2h-4"/></svg><span class="truncate">Dislike</span>`;
 
-      // 2. Reason Selection Drawer
+      // 2. Like Reason Drawer
+      const likeBox = document.createElement("div");
+      likeBox.className = "hidden pt-2 flex flex-col gap-1.5";
+
+      const likeHeader = document.createElement("div");
+      likeHeader.className = "flex items-center justify-between text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 mb-0.5";
+      likeHeader.innerHTML = `<span>Why do you like it?</span>`;
+
+      const likeCloseBtn = document.createElement("button");
+      likeCloseBtn.type = "button";
+      likeCloseBtn.className = "text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs px-1";
+      likeCloseBtn.textContent = "✕";
+      likeCloseBtn.onclick = () => {
+        likeBox.classList.add("hidden");
+        mainActions.classList.remove("hidden");
+      };
+      likeHeader.appendChild(likeCloseBtn);
+      likeBox.appendChild(likeHeader);
+
+      const likeReasonsGrid = document.createElement("div");
+      likeReasonsGrid.className = "grid grid-cols-2 gap-1";
+
+      for (const rText of LIKE_REASONS) {
+        const rb = document.createElement("button");
+        rb.type = "button";
+        rb.className = "text-left text-[11px] py-1 px-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-900/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition truncate" + (a.reason === rText ? " ring-1 ring-emerald-500 font-bold" : "");
+        rb.title = rText;
+        rb.textContent = rText;
+        rb.onclick = () => love(a, rText);
+        likeReasonsGrid.appendChild(rb);
+      }
+      likeBox.appendChild(likeReasonsGrid);
+
+      const likeSkipBtn = document.createElement("button");
+      likeSkipBtn.type = "button";
+      likeSkipBtn.className = "text-center text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 pt-0.5";
+      likeSkipBtn.textContent = "Mark Perfect without reason";
+      likeSkipBtn.onclick = () => love(a, null);
+      likeBox.appendChild(likeSkipBtn);
+
+      // 3. Dislike Reason Drawer
       const reasonBox = document.createElement("div");
       reasonBox.className = "hidden pt-2 flex flex-col gap-1.5";
 
       const reasonHeader = document.createElement("div");
-      reasonHeader.className = "flex items-center justify-between text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-0.5";
+      reasonHeader.className = "flex items-center justify-between text-[11px] font-semibold text-rose-700 dark:text-rose-400 mb-0.5";
       reasonHeader.innerHTML = `<span>Why dislike?</span>`;
 
       const closeBtn = document.createElement("button");
@@ -390,13 +456,18 @@ function render() {
       skipBtn.onclick = () => dislike(a, null, c);
       reasonBox.appendChild(skipBtn);
 
+      lTag.onclick = () => {
+        mainActions.classList.add("hidden");
+        likeBox.classList.remove("hidden");
+      };
+
       d.onclick = () => {
         mainActions.classList.add("hidden");
         reasonBox.classList.remove("hidden");
       };
 
-      mainActions.append(l, d);
-      actionsWrap.append(mainActions, reasonBox);
+      mainActions.append(lWrap, d);
+      actionsWrap.append(mainActions, likeBox, reasonBox);
       c.appendChild(actionsWrap);
     }
 
@@ -511,9 +582,18 @@ DISCOVER_TEMPLATE = """<!doctype html>
     </button>
   </div>
 
+  <!-- 1-Click Perfect Reasons -->
+  <div class="mt-4 p-3 rounded-2xl bg-white dark:bg-[#1c2230] border border-emerald-200/60 dark:border-emerald-900/40">
+    <div class="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 mb-2 flex items-center justify-between">
+      <span>1-Click Perfect with Reason</span>
+      <span class="text-[10px] font-normal text-slate-400">Keys 7 - 0</span>
+    </div>
+    <div id="like-reasons-grid" class="grid grid-cols-2 gap-1.5"></div>
+  </div>
+
   <!-- 1-Click Dislike Reasons -->
-  <div class="mt-4 p-3 rounded-2xl bg-white dark:bg-[#1c2230] border border-slate-200 dark:border-[#2a3441]">
-    <div class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-2 flex items-center justify-between">
+  <div class="mt-3 p-3 rounded-2xl bg-white dark:bg-[#1c2230] border border-rose-200/60 dark:border-rose-900/40">
+    <div class="text-[11px] font-semibold text-rose-700 dark:text-rose-400 mb-2 flex items-center justify-between">
       <span>1-Click Dislike with Reason</span>
       <span class="text-[10px] font-normal text-slate-400">Keys 1 - 4</span>
     </div>
@@ -525,12 +605,12 @@ DISCOVER_TEMPLATE = """<!doctype html>
 
   <!-- Shortcuts Bar -->
   <div class="mt-2 text-center text-[11px] text-slate-400 dark:text-slate-500">
-    <span>Keys: <strong>←/A</strong> Dislike &bull; <strong>1-4</strong> Reason &bull; <strong>↓/Space</strong> Skip &bull; <strong>→/D</strong> Perfect &bull; <strong>Z</strong> Undo</span>
+    <span>Keys: <strong>←/A</strong> Dislike &bull; <strong>1-4</strong> Dislike reason &bull; <strong>→/D</strong> Perfect &bull; <strong>7-0</strong> Like reason &bull; <strong>Z</strong> Undo</span>
   </div>
 </main>
 
 <script>
-const REASONS = __REASONS__;
+const REASONS = __REASONS__, LIKE_REASONS = __LIKE_REASONS__;
 let STATS = __STATS__;
 const TOKEN = new URLSearchParams(location.search).get("t") || "";
 const $ = id => document.getElementById(id);
@@ -538,7 +618,20 @@ let queue = [], current = null, last = null, exhausted = false, fetching = false
 
 $("nav").href = "/?t=" + encodeURIComponent(TOKEN);
 
-// Build 1-click Reason Buttons
+// Build 1-click Like Reason Buttons
+const lGrid = $("like-reasons-grid");
+for (let i = 0; i < LIKE_REASONS.length; i++) {
+  const rText = LIKE_REASONS[i];
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "inline-flex items-center gap-1.5 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-[#161b26] hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-slate-700 dark:text-slate-200 hover:text-emerald-700 dark:hover:text-emerald-300 border border-slate-200 dark:border-[#2a3441] hover:border-emerald-300 dark:hover:border-emerald-800 transition group text-left cursor-pointer";
+  const numLabel = i === 3 ? "0" : String(i + 7);
+  btn.innerHTML = `<span class="w-4 h-4 rounded-md bg-slate-200/80 dark:bg-slate-700 group-hover:bg-emerald-200/80 dark:group-hover:bg-emerald-900/80 text-[10px] font-bold flex items-center justify-center shrink-0">${numLabel}</span><span class="truncate">${rText}</span>`;
+  btn.onclick = () => rateWithLikeReason(i);
+  lGrid.appendChild(btn);
+}
+
+// Build 1-click Dislike Reason Buttons
 const rGrid = $("reasons-grid");
 for (let i = 0; i < REASONS.length; i++) {
   const rText = REASONS[i];
@@ -648,9 +741,37 @@ async function rate(action) {
   busy = false;
 }
 
+async function rateWithLikeReason(idx) {
+  const reason = LIKE_REASONS[idx];
+  if (last && last.action === "like" && !last.reason && (Date.now() - last.time < 5000)) {
+    try {
+      await api("/api/discover-rate", { name: last.name, action: "reason", reason });
+      last.reason = reason;
+      bar("Tagged @" + last.name + " as " + reason, [["Undo (Z)", undo]], 3000);
+    } catch (e) {}
+    return;
+  }
+  if (!current || busy) return;
+  busy = true;
+  const name = current;
+  try {
+    const r = await api("/api/discover-rate", { name, action: "like", reason });
+    STATS = r.stats;
+    last = { name, action: "like", reason, time: Date.now() };
+    me.liked++;
+    const msg = r.info.saved
+      ? "Saved @" + name + " to catalog! (" + reason + ")"
+      : "@" + name + " (" + reason + ")";
+    bar(msg, [["Undo (Z)", undo]], 5000);
+    advance();
+  } catch (e) {
+    bar("Couldn't save rating");
+  }
+  busy = false;
+}
+
 async function rateWithReason(idx) {
   const reason = REASONS[idx];
-  // If user just disliked and wants to tag last
   if (last && last.action === "dislike" && !last.reason && (Date.now() - last.time < 5000)) {
     try {
       await api("/api/discover-rate", { name: last.name, action: "reason", reason });
@@ -659,7 +780,6 @@ async function rateWithReason(idx) {
     } catch (e) {}
     return;
   }
-  // Otherwise directly rate current avatar with reason
   if (!current || busy) return;
   busy = true;
   const name = current;
@@ -715,6 +835,8 @@ document.addEventListener("keydown", e => {
   else if (k === "arrowdown" || k === "s" || k === " ") { e.preventDefault(); skip(); }
   else if (k === "z" || k === "backspace") undo();
   else if (k >= "1" && k <= String(REASONS.length)) rateWithReason(Number(k) - 1);
+  else if (k >= "7" && k <= "9") rateWithLikeReason(Number(k) - 7);
+  else if (k === "0") rateWithLikeReason(3);
 });
 
 showStats();
@@ -732,11 +854,13 @@ def gallery_html(review, prefix="", discover=False):
     if OUTPUT_DIR.exists():
         for path in OUTPUT_DIR.glob("*.png"):
             m = metadata.get(path.stem, {})
+            fb_entry = feedback.get(path.stem, {})
             avatars.append({
                 "name": path.stem,
                 "file": prefix + "avatars/" + quote(path.name),
                 "time": int(path.stat().st_mtime),
-                "liked": feedback.get(path.stem, {}).get("verdict") == "liked",
+                "liked": fb_entry.get("verdict") == "liked",
+                "reason": fb_entry.get("reason", ""),
                 "score": m.get("score"),
                 "story": m.get("color_story", ""),
                 "colors": m.get("dominant_colors", []),
@@ -748,6 +872,7 @@ def gallery_html(review, prefix="", discover=False):
         return json.dumps(value).replace("</", "<\\/")
 
     return (GALLERY_TEMPLATE.replace("__REASONS__", js(DISLIKE_REASONS))
+            .replace("__LIKE_REASONS__", js(LIKE_REASONS))
             .replace("__STATS__", js(feedback_stats(feedback)))
             .replace("__REVIEW__", "true" if review else "false")
             .replace("__DISCOVER__", "true" if discover else "false")
@@ -763,6 +888,7 @@ def build_gallery():
 
 def discover_html():
     return (DISCOVER_TEMPLATE.replace("__REASONS__", json.dumps(DISLIKE_REASONS))
+            .replace("__LIKE_REASONS__", json.dumps(LIKE_REASONS))
             .replace("__STATS__", json.dumps(feedback_stats())))
 
 

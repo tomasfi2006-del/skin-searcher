@@ -45,12 +45,18 @@ EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embe
 GEMINI_MIN_INTERVAL = 4.2
 
 # Application constants
-DISCOVER_DEFAULT_TERMS = ["outfits", "fashion"]
+DISCOVER_DEFAULT_TERMS = ["streetwear", "y2k", "drip", "outfits", "fashion"]
 DISLIKE_REASONS = [
     "Too plain",
     "Messy / cluttered",
     "Not my style",
     "Default / generic",
+]
+LIKE_REASONS = [
+    "Drip / Streetwear",
+    "Clean palette",
+    "Cool hair / accessories",
+    "Unique aesthetic",
 ]
 NAME_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 

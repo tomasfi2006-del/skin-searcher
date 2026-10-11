@@ -42,19 +42,19 @@ def _quota_info(resp):
     return daily, delay
 
 
-JUDGE_PROMPT = """You are helping a Roblox content creator pick avatars to \
-feature in recordings by literally copying the look onto themselves. You \
-will see {n} avatar renders, each labeled "Avatar N:". Score each one on its \
-own (do not compare them to each other) from 1 to 10 for how much this \
-creator would want to copy that look:
-10 = exactly their taste, 7 = probably, 4 = unlikely, 1 = plain, default or \
-clearly not for them. Most random Roblox avatars are plain: score those low.
+JUDGE_PROMPT = """You are evaluating Roblox avatars for a creator with a very specific, curated aesthetic taste. You will see {n} avatar renders, each labeled "Avatar N:". Score each one on its own (do not compare them to each other) from 1 to 10.
 
-General guide: An avatar stands out and has personality when it has:
-- A standout hat/headpiece or signature accessory (horns, halo, headphones, mask, sword, wings).
-- A clear character or theme (streetwear, emo/goth, anime, costume, fantasy, cyberpunk, military, funny/meme).
-- Bold intentional color: saturated color blocking, vibrant neon, or a striking monochrome/high-contrast look.
-- Low score: plain or default starter look (basic free shirt/pants, flat noob colors, nothing curated) or messy random clutter.
+AESTHETIC TASTE PROFILE (What they love — score 8-10):
+- Y2K, Streetwear, Grunge, Alt / Drip: layered 3D clothing, detailed cargo pants, graphic/band tees, chain necklaces, beanies with glasses/goggles, baggy silhouettes.
+- Stylized Anime / Chibi: expressive custom anime/manga faces, layered fluffy/messy hair (curtain bangs, mullets, wolf cuts, colored streaks).
+- Alt / Emo / Scene / Dark Coquette / Zombie: dark or high-contrast palettes (black, deep red, slate, neon accents), ushankas, leg warmers, distinct creative silhouettes.
+- Cyberpunk / Gaming: dark outfits with sharp intentional neon accents (pink, cyan, purple), floating familiars, techwear.
+- Intentional coordination: cohesive 2-3 color palette and distinct UGC accessories.
+
+STRICT DISLIKES (What they hate — score 1-4):
+- Too Plain / Zero Effort: default starter items (bacon hair, pal hair, basic free t-shirts like the motorcycle tee, plain blue jeans, flat starter packs, no accessories).
+- Messy Clutter / Random Event Spam: mismatched overlapping free event accessories (giant random wings + shoulder animals + food on chin) with no coherent style.
+- Generic / Childish: standard blocky R6 with default smiley face and flat solid colors.
 
 Hard criteria flags:
 - clutter: boolean, true if overloaded with messy, disorganized, or overlapping accessories that make the avatar noisy.
@@ -64,7 +64,7 @@ Hard criteria flags:
 Visual styling:
 - dominant_colors: list up to 3 dominant colors (e.g. ["black", "white"], ["red", "black"], ["pink", "pastel blue"]).
 - color_story: choose from ["monochrome", "color_blocking", "rainbow", "neon", "pastel", "earthy", "plain"].
-- theme: a concise 1-2 word style descriptor (e.g. "streetwear", "emo", "anime", "casual", "cyberpunk", "meme", "costume", "plain").
+- theme: a concise 1-2 word style descriptor (e.g. "streetwear", "y2k", "grunge", "anime", "emo", "cyberpunk", "casual", "meme", "plain").
 
 Return one JSON entry per avatar."""
 

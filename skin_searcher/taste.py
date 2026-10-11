@@ -16,6 +16,7 @@ from skin_searcher.config import (
     EMBED_WORKERS,
     FEEDBACK_DIR,
     FEEDBACK_PATH,
+    LIKE_REASONS,
     LOOKALIKE_DISTANCE,
     LOOKALIKE_MIN_DISLIKES,
     LOOKS_CACHE_PATH,
@@ -192,7 +193,14 @@ def feedback_stats(feedback=None):
     fb = load_feedback() if feedback is None else feedback
     liked = sum(1 for v in fb.values() if v.get("verdict") == "liked")
     disliked = sum(1 for v in fb.values() if v.get("verdict") == "disliked")
-    return {"liked": liked, "disliked": disliked}
+    liked_reasons = Counter(v.get("reason") for v in fb.values() if v.get("verdict") == "liked" and v.get("reason"))
+    disliked_reasons = Counter(v.get("reason") for v in fb.values() if v.get("verdict") == "disliked" and v.get("reason"))
+    return {
+        "liked": liked,
+        "disliked": disliked,
+        "liked_reasons": dict(liked_reasons),
+        "disliked_reasons": dict(disliked_reasons),
+    }
 
 
 def dislike_reason_counts():
@@ -216,7 +224,10 @@ def rate_avatar(name, action, reason=None):
             raise ValueError("no such avatar")
         liked_copy.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(avatar, liked_copy)
-        feedback[name] = {"verdict": "liked", "time": now}
+        entry = {"verdict": "liked", "time": now}
+        if reason in LIKE_REASONS:
+            entry["reason"] = reason
+        feedback[name] = entry
     elif action == "dislike":
         if avatar.exists():
             disliked_file.parent.mkdir(parents=True, exist_ok=True)
@@ -229,9 +240,14 @@ def rate_avatar(name, action, reason=None):
             entry["reason"] = reason
         feedback[name] = entry
     elif action == "reason":
-        if feedback.get(name, {}).get("verdict") != "disliked" or reason not in DISLIKE_REASONS:
+        entry = feedback.get(name, {})
+        verdict = entry.get("verdict")
+        if verdict == "disliked" and reason in DISLIKE_REASONS:
+            feedback[name]["reason"] = reason
+        elif verdict == "liked" and reason in LIKE_REASONS:
+            feedback[name]["reason"] = reason
+        else:
             raise ValueError("nothing to tag")
-        feedback[name]["reason"] = reason
     elif action == "clear":
         if disliked_file.exists() and not avatar.exists():
             shutil.move(str(disliked_file), str(avatar))
@@ -274,6 +290,8 @@ def rate_candidate(cand, action, reason, session, max_followers):
         if entry["in_catalog"]:
             OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
             (OUTPUT_DIR / f"{cand['name']}.png").write_bytes(cand["image"])
+        if reason in LIKE_REASONS:
+            entry["reason"] = reason
     elif reason in DISLIKE_REASONS:
         entry["reason"] = reason
     feedback = load_feedback()
