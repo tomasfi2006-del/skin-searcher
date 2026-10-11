@@ -21,6 +21,8 @@ from skin_searcher.config import (
     LOOKALIKE_MIN_DISLIKES,
     LOOKS_CACHE_PATH,
     NAME_RE,
+    OLD_DISLIKE_REASONS,
+    OLD_LIKE_REASONS,
     OUTPUT_DIR,
     TASTE_MIN_DISLIKED,
     TASTE_MIN_PERFECT,
@@ -30,6 +32,9 @@ from skin_searcher.config import (
 )
 from skin_searcher.judge import DailyQuotaExceeded, embed_image
 from skin_searcher.roblox import follower_counts
+
+ALL_DISLIKE_REASONS = set(DISLIKE_REASONS) | set(OLD_DISLIKE_REASONS)
+ALL_LIKE_REASONS = set(LIKE_REASONS) | set(OLD_LIKE_REASONS)
 
 
 def vibrance(png_bytes):
@@ -225,8 +230,8 @@ def rate_avatar(name, action, reason=None):
         liked_copy.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(avatar, liked_copy)
         entry = {"verdict": "liked", "time": now}
-        if reason in LIKE_REASONS:
-            entry["reason"] = reason
+        if reason and isinstance(reason, str) and reason.strip():
+            entry["reason"] = reason.strip()[:100]
         feedback[name] = entry
     elif action == "dislike":
         if avatar.exists():
@@ -236,16 +241,14 @@ def rate_avatar(name, action, reason=None):
             raise ValueError("no such avatar")
         liked_copy.unlink(missing_ok=True)
         entry = {"verdict": "disliked", "time": now}
-        if reason in DISLIKE_REASONS:
-            entry["reason"] = reason
+        if reason and isinstance(reason, str) and reason.strip():
+            entry["reason"] = reason.strip()[:100]
         feedback[name] = entry
     elif action == "reason":
         entry = feedback.get(name, {})
         verdict = entry.get("verdict")
-        if verdict == "disliked" and reason in DISLIKE_REASONS:
-            feedback[name]["reason"] = reason
-        elif verdict == "liked" and reason in LIKE_REASONS:
-            feedback[name]["reason"] = reason
+        if verdict in ("disliked", "liked") and reason and isinstance(reason, str) and reason.strip():
+            feedback[name]["reason"] = reason.strip()[:100]
         else:
             raise ValueError("nothing to tag")
     elif action == "clear":
@@ -290,10 +293,8 @@ def rate_candidate(cand, action, reason, session, max_followers):
         if entry["in_catalog"]:
             OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
             (OUTPUT_DIR / f"{cand['name']}.png").write_bytes(cand["image"])
-        if reason in LIKE_REASONS:
-            entry["reason"] = reason
-    elif reason in DISLIKE_REASONS:
-        entry["reason"] = reason
+    if reason and isinstance(reason, str) and reason.strip():
+        entry["reason"] = reason.strip()[:100]
     feedback = load_feedback()
     feedback[name] = entry
     save_feedback(feedback)

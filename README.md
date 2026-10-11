@@ -22,14 +22,14 @@ username). Also available as `python catalog.py --gallery`.
 
 On that same page, every avatar has **Perfect** and **Dislike** buttons.
 Dislike removes the avatar from your catalog (with an Undo, and optional
-one-click reasons: too plain / messy random mix / not my style). Perfect marks
-the ones you love. Avatars you save by hand with option 3 count as Perfect
-automatically.
+one-click reasons: Default / Starter, Messy / Cluttered, Troll / Meme, Mismatched / Dull).
+Perfect marks the ones you love (with optional reasons: Streetwear / Drip, Clean & Coordinated, Fire Hair / Accessories, Unique / Stylized).
+Avatars you save by hand with option 3 count as Perfect automatically.
 
 **Discover** (menu option 5, or `python catalog.py --discover`) is the fastest way
 to teach it: fresh avatars from outfit/fashion groups appear one at a time and
-you rate them with the arrow keys (left = dislike, right = perfect, down = skip,
-Z = undo, 1-3 = why). Perfect ones are saved to your catalog, unless the account
+you rate them with keys: **1** = dislike, **2** = skip, **3** = like (or arrow keys: left = dislike, down = skip, right = perfect),
+then **1–4** for why or **5** for a custom note (or Space to skip reason, Esc to cancel), and **Z** = undo. Perfect ones are saved to your catalog, unless the account
 has more followers than your limit (then it only counts as a taste example).
 Because these avatars are unfiltered, it also shows what the AI would wrongly
 have thrown away.

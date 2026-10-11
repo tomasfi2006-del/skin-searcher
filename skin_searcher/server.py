@@ -398,15 +398,25 @@ function render() {
       const likeReasonsGrid = document.createElement("div");
       likeReasonsGrid.className = "grid grid-cols-2 gap-1";
 
-      for (const rText of LIKE_REASONS) {
+      for (let i = 0; i < LIKE_REASONS.length; i++) {
+        const rText = LIKE_REASONS[i];
         const rb = document.createElement("button");
         rb.type = "button";
-        rb.className = "text-left text-[11px] py-1 px-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-900/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition truncate" + (a.reason === rText ? " ring-1 ring-emerald-500 font-bold" : "");
+        rb.className = "text-left text-[11px] py-1 px-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-900/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition truncate flex items-center gap-1.5 cursor-pointer" + (a.reason === rText ? " ring-1 ring-emerald-500 font-bold" : "");
         rb.title = rText;
-        rb.textContent = rText;
+        rb.innerHTML = `<span class="w-3.5 h-3.5 rounded bg-emerald-200/80 dark:bg-emerald-900/80 text-emerald-800 dark:text-emerald-200 text-[9px] font-bold flex items-center justify-center shrink-0">${i + 1}</span><span class="truncate">${rText}</span>`;
         rb.onclick = () => love(a, rText);
         likeReasonsGrid.appendChild(rb);
       }
+      const customLikeBtn = document.createElement("button");
+      customLikeBtn.type = "button";
+      customLikeBtn.className = "col-span-2 text-left text-[11px] py-1 px-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-dashed border-emerald-300/70 dark:border-emerald-900/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition truncate flex items-center gap-1.5 cursor-pointer";
+      customLikeBtn.innerHTML = `<span class="w-3.5 h-3.5 rounded bg-emerald-200/80 dark:bg-emerald-900/80 text-emerald-800 dark:text-emerald-200 text-[9px] font-bold flex items-center justify-center shrink-0">5</span><span class="truncate">Custom note...</span>`;
+      customLikeBtn.onclick = () => {
+        const note = prompt("Enter custom note why you like @" + a.name + ":");
+        if (note !== null && note.trim()) love(a, note.trim());
+      };
+      likeReasonsGrid.appendChild(customLikeBtn);
       likeBox.appendChild(likeReasonsGrid);
 
       const likeSkipBtn = document.createElement("button");
@@ -438,15 +448,25 @@ function render() {
       const reasonsGrid = document.createElement("div");
       reasonsGrid.className = "grid grid-cols-2 gap-1";
 
-      for (const rText of REASONS) {
+      for (let i = 0; i < REASONS.length; i++) {
+        const rText = REASONS[i];
         const rb = document.createElement("button");
         rb.type = "button";
-        rb.className = "text-left text-[11px] py-1 px-1.5 rounded-lg bg-rose-50/70 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border border-rose-200/70 dark:border-rose-900/60 hover:bg-rose-100 dark:hover:bg-rose-900/60 transition truncate";
+        rb.className = "text-left text-[11px] py-1 px-1.5 rounded-lg bg-rose-50/70 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border border-rose-200/70 dark:border-rose-900/60 hover:bg-rose-100 dark:hover:bg-rose-900/60 transition truncate flex items-center gap-1.5 cursor-pointer";
         rb.title = rText;
-        rb.textContent = rText;
+        rb.innerHTML = `<span class="w-3.5 h-3.5 rounded bg-rose-200/80 dark:bg-rose-900/80 text-rose-800 dark:text-rose-200 text-[9px] font-bold flex items-center justify-center shrink-0">${i + 1}</span><span class="truncate">${rText}</span>`;
         rb.onclick = () => dislike(a, rText, c);
         reasonsGrid.appendChild(rb);
       }
+      const customDisBtn = document.createElement("button");
+      customDisBtn.type = "button";
+      customDisBtn.className = "col-span-2 text-left text-[11px] py-1 px-1.5 rounded-lg bg-rose-50/70 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border border-dashed border-rose-300/70 dark:border-rose-900/60 hover:bg-rose-100 dark:hover:bg-rose-900/60 transition truncate flex items-center gap-1.5 cursor-pointer";
+      customDisBtn.innerHTML = `<span class="w-3.5 h-3.5 rounded bg-rose-200/80 dark:bg-rose-900/80 text-rose-800 dark:text-rose-200 text-[9px] font-bold flex items-center justify-center shrink-0">5</span><span class="truncate">Custom note...</span>`;
+      customDisBtn.onclick = () => {
+        const note = prompt("Enter custom dislike reason for @" + a.name + ":");
+        if (note !== null && note.trim()) dislike(a, note.trim(), c);
+      };
+      reasonsGrid.appendChild(customDisBtn);
       reasonBox.appendChild(reasonsGrid);
 
       const skipBtn = document.createElement("button");
@@ -552,52 +572,61 @@ DISCOVER_TEMPLATE = """<!doctype html>
     </div>
   </div>
 
-  <!-- Primary Action Controls -->
+  <!-- Primary Action Controls: 1 Dislike | 2 Skip | 3 Like -->
   <div class="grid grid-cols-3 gap-2.5 mt-4">
-    <!-- Dislike Button -->
-    <button id="dis" class="flex flex-col items-center justify-center py-2.5 px-2 rounded-2xl bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900 transition cursor-pointer group">
+    <!-- 1: Dislike -->
+    <button id="dis" class="relative flex flex-col items-center justify-center py-2.5 px-2 rounded-2xl bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900 transition cursor-pointer group shadow-xs active:scale-95">
       <div class="flex items-center gap-1.5 font-semibold text-sm">
+        <span class="w-4 h-4 rounded-md bg-rose-200/80 dark:bg-rose-900/80 text-rose-800 dark:text-rose-200 text-[10px] font-bold flex items-center justify-center shrink-0">1</span>
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h7.528a2 2 0 011.789 1.106l1.5 3A2 2 0 0119.553 9H16v5m-6 0v7m0-7l4 4m2-11h4a2 2 0 012 2v5a2 2 0 01-2 2h-4"/></svg>
         <span>Dislike</span>
       </div>
-      <span class="text-[10px] text-rose-500/80 dark:text-rose-400/80 font-normal mt-0.5">← or A</span>
+      <span class="text-[10px] text-rose-500/80 dark:text-rose-400/80 font-normal mt-0.5">Key 1 (or ← / A)</span>
     </button>
 
-    <!-- Skip Button -->
-    <button id="skip" class="flex flex-col items-center justify-center py-2.5 px-2 rounded-2xl bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 transition cursor-pointer group">
+    <!-- 2: Skip -->
+    <button id="skip" class="relative flex flex-col items-center justify-center py-2.5 px-2 rounded-2xl bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700 transition cursor-pointer group shadow-xs active:scale-95">
       <div class="flex items-center gap-1.5 font-semibold text-sm">
+        <span class="w-4 h-4 rounded-md bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-300 text-[10px] font-bold flex items-center justify-center shrink-0">2</span>
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
         <span>Skip</span>
       </div>
-      <span class="text-[10px] text-slate-500 dark:text-slate-400 font-normal mt-0.5">↓ or Space</span>
+      <span class="text-[10px] text-slate-500 dark:text-slate-400 font-normal mt-0.5">Key 2 (or ↓ / S)</span>
     </button>
 
-    <!-- Perfect Button -->
-    <button id="love" class="flex flex-col items-center justify-center py-2.5 px-2 rounded-2xl bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm shadow-emerald-600/20 transition cursor-pointer group">
+    <!-- 3: Perfect / Like -->
+    <button id="love" class="relative flex flex-col items-center justify-center py-2.5 px-2 rounded-2xl bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm shadow-emerald-600/20 transition cursor-pointer group active:scale-95">
       <div class="flex items-center gap-1.5 font-semibold text-sm">
+        <span class="w-4 h-4 rounded-md bg-emerald-700/80 text-white text-[10px] font-bold flex items-center justify-center shrink-0">3</span>
         <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-        <span>Perfect</span>
+        <span>Like</span>
       </div>
-      <span class="text-[10px] text-emerald-100 font-normal mt-0.5">→ or D</span>
+      <span class="text-[10px] text-emerald-100 font-normal mt-0.5">Key 3 (or → / D)</span>
     </button>
   </div>
 
-  <!-- 1-Click Perfect Reasons -->
-  <div class="mt-4 p-3 rounded-2xl bg-white dark:bg-[#1c2230] border border-emerald-200/60 dark:border-emerald-900/40">
-    <div class="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 mb-2 flex items-center justify-between">
-      <span>1-Click Perfect with Reason</span>
-      <span class="text-[10px] font-normal text-slate-400">Keys 7 - 0</span>
+  <!-- Dynamic Reason Drawer (Appears when Dislike [1] or Like [3] is selected) -->
+  <div id="reason-panel" class="hidden mt-3 p-3.5 rounded-2xl bg-white dark:bg-[#1c2230] border shadow-xs transition-all duration-150">
+    <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center gap-2">
+        <span id="reason-title" class="text-xs font-bold tracking-tight"></span>
+        <span class="text-[10px] text-slate-400 dark:text-slate-500">Pick 1–4, 5 for custom note, Space to skip</span>
+      </div>
+      <button id="reason-cancel-btn" type="button" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs px-1 cursor-pointer" title="Cancel (Esc)">✕</button>
     </div>
-    <div id="like-reasons-grid" class="grid grid-cols-2 gap-1.5"></div>
-  </div>
-
-  <!-- 1-Click Dislike Reasons -->
-  <div class="mt-3 p-3 rounded-2xl bg-white dark:bg-[#1c2230] border border-rose-200/60 dark:border-rose-900/40">
-    <div class="text-[11px] font-semibold text-rose-700 dark:text-rose-400 mb-2 flex items-center justify-between">
-      <span>1-Click Dislike with Reason</span>
-      <span class="text-[10px] font-normal text-slate-400">Keys 1 - 4</span>
+    <div id="reason-buttons" class="grid grid-cols-2 gap-1.5"></div>
+    <form id="custom-form" class="hidden mt-2.5 flex gap-1.5" onsubmit="event.preventDefault(); submitCustomNote();">
+      <input id="custom-input" type="text" maxlength="80" placeholder="Type custom note and press Enter..." class="flex-1 px-3 py-1.5 text-xs rounded-xl bg-white dark:bg-[#161b26] border border-slate-300 dark:border-[#2a3441] text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+      <button type="submit" class="px-3 py-1.5 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white transition cursor-pointer">Save</button>
+      <button id="custom-cancel" type="button" class="px-2.5 py-1.5 text-xs font-medium rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition cursor-pointer">Cancel</button>
+    </form>
+    <div class="flex items-center justify-between gap-2 mt-2.5 pt-2 border-t border-slate-100 dark:border-[#2a3441]/60">
+      <button id="reason-skip-btn" type="button" class="text-xs font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100 hover:underline cursor-pointer flex items-center gap-1">
+        <span>Continue without reason</span>
+        <span class="text-[10px] px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">Space</span>
+      </button>
+      <button id="reason-close-text" type="button" class="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 cursor-pointer">Cancel (Esc)</button>
     </div>
-    <div id="reasons-grid" class="grid grid-cols-2 gap-1.5"></div>
   </div>
 
   <!-- Status & Feedback Area -->
@@ -605,7 +634,7 @@ DISCOVER_TEMPLATE = """<!doctype html>
 
   <!-- Shortcuts Bar -->
   <div class="mt-2 text-center text-[11px] text-slate-400 dark:text-slate-500">
-    <span>Keys: <strong>←/A</strong> Dislike &bull; <strong>1-4</strong> Dislike reason &bull; <strong>→/D</strong> Perfect &bull; <strong>7-0</strong> Like reason &bull; <strong>Z</strong> Undo</span>
+    <span>Keys: <strong>1</strong> Dislike &bull; <strong>2</strong> Skip &bull; <strong>3</strong> Like &bull; Then <strong>1-4</strong> or <strong>5</strong> Custom &bull; <strong>Z</strong> Undo</span>
   </div>
 </main>
 
@@ -615,33 +644,103 @@ let STATS = __STATS__;
 const TOKEN = new URLSearchParams(location.search).get("t") || "";
 const $ = id => document.getElementById(id);
 let queue = [], current = null, last = null, exhausted = false, fetching = false, busy = false, me = { liked: 0, disliked: 0 }, barTimer;
+let reasonMode = null; // null | "dislike" | "like"
 
 $("nav").href = "/?t=" + encodeURIComponent(TOKEN);
 
-// Build 1-click Like Reason Buttons
-const lGrid = $("like-reasons-grid");
-for (let i = 0; i < LIKE_REASONS.length; i++) {
-  const rText = LIKE_REASONS[i];
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "inline-flex items-center gap-1.5 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-[#161b26] hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-slate-700 dark:text-slate-200 hover:text-emerald-700 dark:hover:text-emerald-300 border border-slate-200 dark:border-[#2a3441] hover:border-emerald-300 dark:hover:border-emerald-800 transition group text-left cursor-pointer";
-  const numLabel = i === 3 ? "0" : String(i + 7);
-  btn.innerHTML = `<span class="w-4 h-4 rounded-md bg-slate-200/80 dark:bg-slate-700 group-hover:bg-emerald-200/80 dark:group-hover:bg-emerald-900/80 text-[10px] font-bold flex items-center justify-center shrink-0">${numLabel}</span><span class="truncate">${rText}</span>`;
-  btn.onclick = () => rateWithLikeReason(i);
-  lGrid.appendChild(btn);
+function openCustomInput() {
+  const form = $("custom-form");
+  const input = $("custom-input");
+  form.classList.remove("hidden");
+  input.value = "";
+  input.focus();
 }
 
-// Build 1-click Dislike Reason Buttons
-const rGrid = $("reasons-grid");
-for (let i = 0; i < REASONS.length; i++) {
-  const rText = REASONS[i];
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "inline-flex items-center gap-1.5 py-1.5 px-2 text-xs font-medium rounded-xl bg-slate-50 dark:bg-[#161b26] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-700 dark:text-slate-200 hover:text-rose-700 dark:hover:text-rose-300 border border-slate-200 dark:border-[#2a3441] hover:border-rose-200 dark:hover:border-rose-900/60 transition group text-left cursor-pointer";
-  btn.innerHTML = `<span class="w-4 h-4 rounded-md bg-slate-200/80 dark:bg-slate-700 group-hover:bg-rose-200/80 dark:group-hover:bg-rose-900/80 text-[10px] font-bold flex items-center justify-center shrink-0">${i + 1}</span><span class="truncate">${rText}</span>`;
-  btn.onclick = () => rateWithReason(i);
-  rGrid.appendChild(btn);
+function closeCustomInput() {
+  const form = $("custom-form");
+  if (form) form.classList.add("hidden");
+  const input = $("custom-input");
+  if (input) input.value = "";
 }
+
+function submitCustomNote() {
+  const input = $("custom-input");
+  const note = input ? input.value.trim() : "";
+  if (reasonMode) {
+    submitRating(reasonMode, note || null);
+  }
+  closeCustomInput();
+}
+
+function openReasonDrawer(mode) {
+  if (!current || busy) return;
+  reasonMode = mode;
+  closeCustomInput();
+  const panel = $("reason-panel");
+  const title = $("reason-title");
+  const grid = $("reason-buttons");
+  const skipBtn = $("reason-skip-btn");
+  grid.textContent = "";
+
+  if (mode === "dislike") {
+    panel.className = "mt-3 p-3.5 rounded-2xl bg-rose-50/40 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/60 shadow-xs transition-all duration-150";
+    title.className = "text-xs font-bold text-rose-700 dark:text-rose-400";
+    title.textContent = "Why Dislike?";
+    skipBtn.innerHTML = `<span>Dislike without reason</span><span class="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-900/50 text-rose-700 dark:text-rose-300 font-semibold">Space</span>`;
+
+    for (let i = 0; i < REASONS.length; i++) {
+      const rText = REASONS[i];
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "inline-flex items-center gap-1.5 py-2 px-2.5 text-xs font-medium rounded-xl bg-white dark:bg-[#161b26] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-800 dark:text-slate-200 hover:text-rose-700 dark:hover:text-rose-300 border border-rose-100 dark:border-rose-900/40 hover:border-rose-300 dark:hover:border-rose-800 transition group text-left cursor-pointer shadow-xs";
+      btn.innerHTML = `<span class="w-4 h-4 rounded-md bg-rose-100 dark:bg-rose-900/80 group-hover:bg-rose-200 text-rose-800 dark:text-rose-200 text-[10px] font-bold flex items-center justify-center shrink-0">${i + 1}</span><span class="truncate">${rText}</span>`;
+      btn.onclick = () => submitRating("dislike", rText);
+      grid.appendChild(btn);
+    }
+    const customBtn = document.createElement("button");
+    customBtn.type = "button";
+    customBtn.className = "col-span-2 inline-flex items-center gap-1.5 py-2 px-2.5 text-xs font-medium rounded-xl bg-white dark:bg-[#161b26] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-800 dark:text-slate-200 hover:text-rose-700 dark:hover:text-rose-300 border border-dashed border-rose-300/80 dark:border-rose-900/60 transition group text-left cursor-pointer shadow-xs";
+    customBtn.innerHTML = `<span class="w-4 h-4 rounded-md bg-rose-100 dark:bg-rose-900/80 text-rose-800 dark:text-rose-200 text-[10px] font-bold flex items-center justify-center shrink-0">5</span><span class="truncate">Custom note...</span>`;
+    customBtn.onclick = openCustomInput;
+    grid.appendChild(customBtn);
+  } else {
+    panel.className = "mt-3 p-3.5 rounded-2xl bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/60 shadow-xs transition-all duration-150";
+    title.className = "text-xs font-bold text-emerald-700 dark:text-emerald-400";
+    title.textContent = "Why Like?";
+    skipBtn.innerHTML = `<span>Like without reason</span><span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 font-semibold">Space</span>`;
+
+    for (let i = 0; i < LIKE_REASONS.length; i++) {
+      const rText = LIKE_REASONS[i];
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "inline-flex items-center gap-1.5 py-2 px-2.5 text-xs font-medium rounded-xl bg-white dark:bg-[#161b26] hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-slate-800 dark:text-slate-200 hover:text-emerald-700 dark:hover:text-emerald-300 border border-emerald-100 dark:border-emerald-900/40 hover:border-emerald-300 dark:hover:border-emerald-800 transition group text-left cursor-pointer shadow-xs";
+      btn.innerHTML = `<span class="w-4 h-4 rounded-md bg-emerald-100 dark:bg-emerald-900/80 group-hover:bg-emerald-200 text-emerald-800 dark:text-emerald-200 text-[10px] font-bold flex items-center justify-center shrink-0">${i + 1}</span><span class="truncate">${rText}</span>`;
+      btn.onclick = () => submitRating("like", rText);
+      grid.appendChild(btn);
+    }
+    const customBtn = document.createElement("button");
+    customBtn.type = "button";
+    customBtn.className = "col-span-2 inline-flex items-center gap-1.5 py-2 px-2.5 text-xs font-medium rounded-xl bg-white dark:bg-[#161b26] hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-slate-800 dark:text-slate-200 hover:text-emerald-700 dark:hover:text-emerald-300 border border-dashed border-emerald-300/80 dark:border-emerald-900/60 transition group text-left cursor-pointer shadow-xs";
+    customBtn.innerHTML = `<span class="w-4 h-4 rounded-md bg-emerald-100 dark:bg-emerald-900/80 text-emerald-800 dark:text-emerald-200 text-[10px] font-bold flex items-center justify-center shrink-0">5</span><span class="truncate">Custom note...</span>`;
+    customBtn.onclick = openCustomInput;
+    grid.appendChild(customBtn);
+  }
+  panel.classList.remove("hidden");
+}
+
+function closeReasonDrawer() {
+  reasonMode = null;
+  closeCustomInput();
+  const panel = $("reason-panel");
+  if (panel) panel.classList.add("hidden");
+}
+
+$("reason-cancel-btn").onclick = closeReasonDrawer;
+$("reason-close-text").onclick = closeReasonDrawer;
+$("custom-cancel").onclick = closeCustomInput;
+$("reason-skip-btn").onclick = () => {
+  if (reasonMode) submitRating(reasonMode, null);
+};
 
 async function api(path, body) {
   const r = await fetch(path, {
@@ -690,6 +789,7 @@ async function refill() {
 }
 
 function advance() {
+  closeReasonDrawer();
   current = queue.shift() || null;
   render();
   for (const n of queue.slice(0, 3)) {
@@ -712,27 +812,30 @@ function render() {
   } else {
     stage.textContent = exhausted ? "No more new avatars from these groups." : "Finding avatars...";
     $("name").innerHTML = "&nbsp;";
+    closeReasonDrawer();
   }
   showStats();
 }
 
-async function rate(action) {
+async function submitRating(action, reason) {
   if (!current || busy) return;
   busy = true;
   const name = current;
+  closeReasonDrawer();
   try {
-    const r = await api("/api/discover-rate", { name, action });
+    const r = await api("/api/discover-rate", { name, action, reason });
     STATS = r.stats;
-    last = { name, action, time: Date.now() };
+    last = { name, action, reason, time: Date.now() };
+    const reasonTag = reason ? " (" + reason + ")" : "";
     if (action === "like") {
       me.liked++;
       const msg = r.info.saved
-        ? "Saved @" + name + " to catalog!"
-        : "@" + name + " has " + (r.info.followers == null ? "unknown" : r.info.followers.toLocaleString()) + " followers (not saved).";
+        ? "Saved @" + name + " to catalog!" + reasonTag
+        : "@" + name + " (" + (r.info.followers == null ? "unknown" : r.info.followers.toLocaleString()) + " followers)" + reasonTag;
       bar(msg, [["Undo (Z)", undo]], 4000);
     } else {
       me.disliked++;
-      bar("Disliked @" + name, [["Undo (Z)", undo]], 5000);
+      bar("Disliked @" + name + reasonTag, [["Undo (Z)", undo]], 5000);
     }
     advance();
   } catch (e) {
@@ -741,62 +844,8 @@ async function rate(action) {
   busy = false;
 }
 
-async function rateWithLikeReason(idx) {
-  const reason = LIKE_REASONS[idx];
-  if (last && last.action === "like" && !last.reason && (Date.now() - last.time < 5000)) {
-    try {
-      await api("/api/discover-rate", { name: last.name, action: "reason", reason });
-      last.reason = reason;
-      bar("Tagged @" + last.name + " as " + reason, [["Undo (Z)", undo]], 3000);
-    } catch (e) {}
-    return;
-  }
-  if (!current || busy) return;
-  busy = true;
-  const name = current;
-  try {
-    const r = await api("/api/discover-rate", { name, action: "like", reason });
-    STATS = r.stats;
-    last = { name, action: "like", reason, time: Date.now() };
-    me.liked++;
-    const msg = r.info.saved
-      ? "Saved @" + name + " to catalog! (" + reason + ")"
-      : "@" + name + " (" + reason + ")";
-    bar(msg, [["Undo (Z)", undo]], 5000);
-    advance();
-  } catch (e) {
-    bar("Couldn't save rating");
-  }
-  busy = false;
-}
-
-async function rateWithReason(idx) {
-  const reason = REASONS[idx];
-  if (last && last.action === "dislike" && !last.reason && (Date.now() - last.time < 5000)) {
-    try {
-      await api("/api/discover-rate", { name: last.name, action: "reason", reason });
-      last.reason = reason;
-      bar("Tagged @" + last.name + " as " + reason, [["Undo (Z)", undo]], 3000);
-    } catch (e) {}
-    return;
-  }
-  if (!current || busy) return;
-  busy = true;
-  const name = current;
-  try {
-    const r = await api("/api/discover-rate", { name, action: "dislike", reason });
-    STATS = r.stats;
-    last = { name, action: "dislike", reason, time: Date.now() };
-    me.disliked++;
-    bar("Disliked @" + name + " (" + reason + ")", [["Undo (Z)", undo]], 5000);
-    advance();
-  } catch (e) {
-    bar("Couldn't save rating");
-  }
-  busy = false;
-}
-
 function skip() {
+  closeReasonDrawer();
   if (current) {
     last = null;
     advance();
@@ -806,6 +855,7 @@ function skip() {
 async function undo() {
   if (!last || busy) return;
   busy = true;
+  closeReasonDrawer();
   const l = last;
   try {
     const r = await api("/api/discover-rate", { name: l.name, action: "undo" });
@@ -823,20 +873,67 @@ async function undo() {
   busy = false;
 }
 
-$("dis").onclick = () => rate("dislike");
-$("love").onclick = () => rate("like");
+$("dis").onclick = () => openReasonDrawer("dislike");
+$("love").onclick = () => openReasonDrawer("like");
 $("skip").onclick = skip;
 
 document.addEventListener("keydown", e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
-  if (k === "arrowleft" || k === "a") rate("dislike");
-  else if (k === "arrowright" || k === "d") rate("like");
-  else if (k === "arrowdown" || k === "s" || k === " ") { e.preventDefault(); skip(); }
-  else if (k === "z" || k === "backspace") undo();
-  else if (k >= "1" && k <= String(REASONS.length)) rateWithReason(Number(k) - 1);
-  else if (k >= "7" && k <= "9") rateWithLikeReason(Number(k) - 7);
-  else if (k === "0") rateWithLikeReason(3);
+
+  // If currently typing in custom note input, allow typing and handle Esc:
+  if (e.target && e.target.tagName === "INPUT") {
+    if (e.key === "Escape") {
+      closeCustomInput();
+    }
+    return;
+  }
+
+  // Undo is always accessible
+  if (k === "z" || (k === "backspace" && reasonMode === null)) {
+    undo();
+    return;
+  }
+
+  // When Reason Drawer is open:
+  if (reasonMode) {
+    if (k === "escape") {
+      closeReasonDrawer();
+      return;
+    }
+    if (k === " " || k === "enter") {
+      e.preventDefault();
+      submitRating(reasonMode, null);
+      return;
+    }
+    if (k >= "1" && k <= "4") {
+      e.preventDefault();
+      const idx = Number(k) - 1;
+      const list = reasonMode === "dislike" ? REASONS : LIKE_REASONS;
+      if (idx < list.length) {
+        submitRating(reasonMode, list[idx]);
+      }
+      return;
+    }
+    if (k === "5") {
+      e.preventDefault();
+      openCustomInput();
+      return;
+    }
+    return;
+  }
+
+  // In Normal Ready Mode:
+  if (k === "1" || k === "arrowleft" || k === "a") {
+    openReasonDrawer("dislike");
+  } else if (k === "2" || k === "arrowdown" || k === "s" || k === " ") {
+    e.preventDefault();
+    skip();
+  } else if (k === "3" || k === "arrowright" || k === "d") {
+    openReasonDrawer("like");
+  } else if (k === "backspace") {
+    undo();
+  }
 });
 
 showStats();

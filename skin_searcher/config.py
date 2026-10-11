@@ -47,12 +47,24 @@ GEMINI_MIN_INTERVAL = 4.2
 # Application constants
 DISCOVER_DEFAULT_TERMS = ["streetwear", "y2k", "drip", "outfits", "fashion"]
 DISLIKE_REASONS = [
+    "Default / Starter",
+    "Messy / Cluttered",
+    "Troll / Meme",
+    "Mismatched / Dull",
+]
+LIKE_REASONS = [
+    "Streetwear / Drip",
+    "Clean & Coordinated",
+    "Fire Hair / Accessories",
+    "Unique / Stylized",
+]
+OLD_DISLIKE_REASONS = [
     "Too plain",
     "Messy / cluttered",
     "Not my style",
     "Default / generic",
 ]
-LIKE_REASONS = [
+OLD_LIKE_REASONS = [
     "Drip / Streetwear",
     "Clean palette",
     "Cool hair / accessories",
