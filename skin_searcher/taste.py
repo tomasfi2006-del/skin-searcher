@@ -31,6 +31,53 @@ from skin_searcher.judge import DailyQuotaExceeded, embed_image
 from skin_searcher.roblox import follower_counts
 
 
+def vibrance(png_bytes):
+    """Measures color vibrance, saturation share, hue diversity, and grey share.
+
+    Returns dict with metrics, or None if image has no readable avatar pixels.
+    """
+    try:
+        from PIL import Image
+        import numpy as np
+    except ImportError:
+        return None
+    try:
+        im = Image.open(io.BytesIO(png_bytes)).convert("RGBA").resize((140, 140))
+        a = np.asarray(im)
+        mask = a[..., 3] > 200
+        if mask.sum() < 500:
+            return None
+        rgb = a[..., :3][mask].astype(float)
+        hsv = np.asarray(Image.fromarray(a[..., :3]).convert("HSV"))[mask].astype(float)
+        h, s, v = hsv[:, 0] * 360 / 255, hsv[:, 1] / 255, hsv[:, 2] / 255
+        rg, yb = rgb[:, 0] - rgb[:, 1], 0.5 * (rgb[:, 0] + rgb[:, 1]) - rgb[:, 2]
+        colourful = float(np.hypot(rg.std(), yb.std()) + 0.3 * np.hypot(rg.mean(), yb.mean()))
+        colour_px = (s > 0.45) & (v > 0.35)
+        hist = np.bincount((h[colour_px] // 30).astype(int) % 12, minlength=12) / mask.sum()
+        return {
+            "colourful": colourful,
+            "sat_share": float(colour_px.mean()),
+            "hues": int((hist > 0.04).sum()),
+            "grey_share": float(((s < 0.15) | (v < 0.15)).mean()),
+        }
+    except Exception:
+        return None
+
+
+def is_plain_avatar(png_bytes, min_colourful: float = 4.0):
+    """Calibrated local pre-filter: skips broken/empty renders or lifeless plain avatars.
+
+    Keeps 95%+ of liked avatars while filtering uninteresting starter looks without Gemini quota.
+    """
+    vib = vibrance(png_bytes)
+    if vib is None:
+        return True  # Empty/broken render (less than 500 solid pixels)
+    # Avatars with very low colourful AND nearly 100% grey/washed-out pixels
+    if vib["colourful"] < min_colourful and vib["grey_share"] > 0.98:
+        return True
+    return False
+
+
 def look_hash(png):
     """A 144-bit difference hash fingerprint of an avatar's visual layout."""
     try:

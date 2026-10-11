@@ -1,5 +1,6 @@
 """Execution pipeline for group member crawling, keyword search, judging, and avatar saving."""
 import random
+import shutil
 import threading
 import time
 from collections import Counter, deque
@@ -7,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 
 from skin_searcher.config import (
+    CATALOG_DIR,
     DEFAULT_SETTINGS,
     EMBED_DIMS,
     EMBED_WORKERS,
@@ -28,24 +30,36 @@ from skin_searcher.roblox import (
     resolve_usernames,
     search_users,
 )
-from skin_searcher.taste import KnownLooks, SavedLooks, TasteModel, load_feedback, rate_avatar
+from skin_searcher.taste import (
+    KnownLooks,
+    SavedLooks,
+    TasteModel,
+    is_plain_avatar,
+    load_feedback,
+    look_hash,
+    rate_avatar,
+    save_feedback,
+)
 
 
 def save_avatar(user, image, meta=None, saved_looks=None):
-    """Saves avatar PNG and updates avatar metadata."""
+    """Saves avatar PNG and updates avatar metadata with user ID and look hash."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUTPUT_DIR / f"{user['name']}.png").write_bytes(image)
+    h = look_hash(image)
     if saved_looks is not None:
         saved_looks.add(user["name"], image)
-    if meta is not None:
-        all_meta = load_metadata()
-        all_meta[user["name"]] = {
-            "id": user.get("id"),
-            "name": user.get("name"),
-            "saved_at": int(time.time()),
-            **meta,
-        }
-        save_metadata(all_meta)
+    all_meta = load_metadata()
+    record = {
+        "id": user.get("id"),
+        "name": user.get("name"),
+        "look_hash": h,
+        "saved_at": int(time.time()),
+    }
+    if meta:
+        record.update(meta)
+    all_meta[user["name"]] = record
+    save_metadata(all_meta)
 
 
 class CandidateFeed:
@@ -155,14 +169,19 @@ class AutoRun:
         ready = [u for u in candidates if u["id"] in images]
         self.stats["no avatar render (retried next run)"] += len(candidates) - len(ready)
 
+        use_vib = getattr(self.args, "use_vibrance_filter", DEFAULT_SETTINGS.get("use_vibrance_filter", 1))
+        vib_min = getattr(self.args, "vibrance_min", DEFAULT_SETTINGS.get("vibrance_min", 4))
+
         kept = []
         for user in ready:
             img = images[user["id"]]
             if self.looks.is_junk(img):
                 self.seen.add(user["id"])
                 self.stats["look like avatars you disliked"] += 1
+            elif use_vib and is_plain_avatar(img, min_colourful=vib_min):
+                self.seen.add(user["id"])
+                self.stats["plain / lifeless (local color pre-filter)"] += 1
             else:
-                # Check for near duplicates of already cataloged avatars for diversity
                 is_dup, dup_name = self.saved_looks.is_duplicate(img)
                 if is_dup:
                     self.seen.add(user["id"])
@@ -245,7 +264,17 @@ class AutoRun:
                 saved_count += 1
                 theme_str = f" [{verdict.get('theme')}]" if verdict.get("theme") else ""
                 colors_str = f" ({', '.join(verdict.get('dominant_colors', []))})" if verdict.get("dominant_colors") else ""
-                print(f"  + {user['name']} [{verdict['score']}/10]{theme_str}{colors_str} - {verdict.get('reason', '')}")
+                flags = []
+                if verdict.get("face_hidden"):
+                    flags.append("face-hidden")
+                if verdict.get("unusual_skin_tone"):
+                    flags.append("unusual-skin")
+                if verdict.get("clutter"):
+                    flags.append("cluttered")
+                if verdict.get("funny"):
+                    flags.append("funny")
+                flags_str = f" <{', '.join(flags)}>" if flags else ""
+                print(f"  + {user['name']} [{verdict['score']}/10]{theme_str}{colors_str}{flags_str} - {verdict.get('reason', '')}")
         return saved_count
 
 
@@ -299,7 +328,7 @@ def search_groups(run):
                     group_evaluated += eval_n
                     group_saved += save_n
 
-                    # Early bail check: save Gemini quota if the group is barren
+                    # Statistical early bail check
                     bail, reason = tracker.should_early_bail(group_evaluated, group_saved,
                                                              min_eval=bail_min_eval, min_yield=bail_min_yield)
                     if bail:
@@ -314,7 +343,6 @@ def search_groups(run):
                     continue
                 print(f"  member list failed partway: {e}")
 
-            # Record stats for this group run
             if group_evaluated > 0:
                 tracker.record(group["id"], group["name"], group_evaluated, group_saved)
                 yield_pct = 100.0 * group_saved / group_evaluated
@@ -352,6 +380,122 @@ def run_usernames(args, session, seen):
         print(f"  + {user['name']}")
     save_seen(seen)
     print(f"\nDone. Saved {saved} avatar(s) to {OUTPUT_DIR}/")
+
+
+def refresh_catalog(session):
+    """Re-resolves usernames by user ID and detects if saved avatars changed appearance."""
+    metadata = load_metadata()
+    if not OUTPUT_DIR.is_dir():
+        print("Catalog directory does not exist.")
+        return
+
+    avatar_files = list(OUTPUT_DIR.glob("*.png"))
+    if not avatar_files:
+        print("Catalog is currently empty.")
+        return
+
+    print(f"\nRefreshing {len(avatar_files)} catalog avatars...")
+    user_ids, user_map = [], {}
+    for p in avatar_files:
+        meta = metadata.get(p.stem, {})
+        uid = meta.get("id")
+        if uid:
+            user_ids.append(uid)
+            user_map[uid] = p.stem
+        else:
+            print(f"  {p.stem}: no user_id recorded, skipped")
+
+    if not user_ids:
+        print("No accounts with user IDs to refresh.")
+        return
+
+    # Check for renamed accounts
+    id_to_current_name = {}
+    for i in range(0, len(user_ids), 100):
+        batch = user_ids[i:i + 100]
+        try:
+            resp = session.post(
+                "https://users.roblox.com/v1/users",
+                json={"userIds": batch, "excludeBannedUsers": False},
+                timeout=15,
+            )
+            if resp.ok:
+                for u in resp.json().get("data", []):
+                    id_to_current_name[u["id"]] = u["name"]
+        except Exception as e:
+            print(f"  Username resolution error: {e}")
+
+    renamed = 0
+    feedback = load_feedback()
+    for uid, old_name in list(user_map.items()):
+        new_name = id_to_current_name.get(uid)
+        if new_name and new_name != old_name:
+            old_file = OUTPUT_DIR / f"{old_name}.png"
+            new_file = OUTPUT_DIR / f"{new_name}.png"
+            if old_file.is_file():
+                old_file.rename(new_file)
+                print(f"  [Username Changed] {old_name} -> {new_name}")
+                renamed += 1
+                if old_name in metadata:
+                    meta = metadata.pop(old_name)
+                    meta["name"] = new_name
+                    metadata[new_name] = meta
+                if old_name in feedback:
+                    fb_entry = feedback.pop(old_name)
+                    feedback[new_name] = fb_entry
+                user_map[uid] = new_name
+
+    if renamed:
+        save_metadata(metadata)
+        save_feedback(feedback)
+        print(f"Updated {renamed} renamed account(s).")
+    else:
+        print("All usernames are up to date.")
+
+    # Check for outfit changes
+    print("\nChecking for changed avatar looks...")
+    fresh_images = fetch_avatar_images(session, list(user_map.keys()))
+    changed = 0
+    for uid, name in user_map.items():
+        img = fresh_images.get(uid)
+        if not img:
+            continue
+        new_hash = look_hash(img)
+        file_path = OUTPUT_DIR / f"{name}.png"
+        saved_hash = metadata.get(name, {}).get("look_hash")
+        if saved_hash is None and file_path.is_file():
+            saved_hash = look_hash(file_path.read_bytes())
+
+        if new_hash is not None and saved_hash is not None:
+            dist = bin(new_hash ^ saved_hash).count("1")
+            if dist > 6:
+                changed += 1
+                print(f"  [Look Changed] {name}: visual difference {dist}/144")
+                metadata.setdefault(name, {})["look_changed"] = True
+                metadata[name]["current_look_hash"] = new_hash
+
+    save_metadata(metadata)
+    print(f"\nDone. {changed} avatar(s) detected with changed looks.")
+
+
+def reset_catalog():
+    """Resets the catalog avatars, metadata, and seen users cache."""
+    backup_dir = CATALOG_DIR / f"avatars_backup_{int(time.time())}"
+    cleared = 0
+    if OUTPUT_DIR.is_dir():
+        pngs = list(OUTPUT_DIR.glob("*.png"))
+        if pngs:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            for p in pngs:
+                shutil.copyfile(p, backup_dir / p.name)
+            for p in pngs:
+                p.unlink(missing_ok=True)
+            cleared = len(pngs)
+            print(f"Backed up {cleared} avatars to {backup_dir.name}/ and cleared {OUTPUT_DIR.name}/")
+
+    save_metadata({})
+    save_seen(set())
+    print("Catalog reset successfully: cleared saved avatars, metadata, and seen_users.json.")
 
 
 def run_auto(args, session, seen, api_key):

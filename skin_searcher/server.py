@@ -265,6 +265,10 @@ def gallery_html(review, prefix="", discover=False):
                 "story": m.get("color_story", ""),
                 "colors": m.get("dominant_colors", []),
                 "theme": m.get("theme", ""),
+                "face_hidden": m.get("face_hidden", False),
+                "clutter": m.get("clutter", False),
+                "funny": m.get("funny", False),
+                "unusual_skin": m.get("unusual_skin_tone", False),
             })
 
     def js(value):

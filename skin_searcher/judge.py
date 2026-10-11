@@ -56,11 +56,17 @@ General guide: An avatar stands out and has personality when it has:
 - Bold intentional color: saturated color blocking, vibrant neon, or a striking monochrome/high-contrast look.
 - Low score: plain or default starter look (basic free shirt/pants, flat noob colors, nothing curated) or messy random clutter.
 
-Also extract visual attributes for each avatar:
+Hard criteria flags:
+- face_hidden: boolean, true if the face is completely covered by a helmet, mask, void head, faceless, or blocked.
+- unusual_skin_tone: boolean, true if the avatar has an unnatural skin tone (purple, green, blue, jet black, grey, red).
+- clutter: boolean, true if overloaded with messy, disorganized, or overlapping accessories that make the avatar noisy.
+- funny: boolean, true if it is a humorous, meme, funny novelty or parody look.
+- has_standout_accessory: boolean, true if has a prominent eye-catching hat, weapon, wings, or signature piece.
+
+Visual styling:
 - dominant_colors: list up to 3 dominant colors (e.g. ["black", "white"], ["red", "black"], ["pink", "pastel blue"]).
-- color_story: choose the best fit from ["monochrome", "color_blocking", "rainbow", "neon", "pastel", "earthy", "plain"].
+- color_story: choose from ["monochrome", "color_blocking", "rainbow", "neon", "pastel", "earthy", "plain"].
 - theme: a concise 1-2 word style descriptor (e.g. "streetwear", "emo", "anime", "casual", "cyberpunk", "meme", "costume", "plain").
-- has_standout_accessory: boolean, true if has a prominent eye-catching hat, weapon, wings, or headpiece.
 
 Return one JSON entry per avatar."""
 
@@ -72,6 +78,11 @@ VERDICT_SCHEMA = {
             "avatar": {"type": "INTEGER"},
             "score": {"type": "INTEGER"},
             "reason": {"type": "STRING"},
+            "face_hidden": {"type": "BOOLEAN"},
+            "unusual_skin_tone": {"type": "BOOLEAN"},
+            "clutter": {"type": "BOOLEAN"},
+            "funny": {"type": "BOOLEAN"},
+            "has_standout_accessory": {"type": "BOOLEAN"},
             "dominant_colors": {
                 "type": "ARRAY",
                 "items": {"type": "STRING"},
@@ -81,7 +92,6 @@ VERDICT_SCHEMA = {
                 "enum": ["monochrome", "color_blocking", "rainbow", "neon", "pastel", "earthy", "plain"],
             },
             "theme": {"type": "STRING"},
-            "has_standout_accessory": {"type": "BOOLEAN"},
         },
         "required": ["avatar", "score", "reason"],
     },
@@ -168,6 +178,10 @@ class GeminiJudge:
                             "color_story": v.get("color_story", "plain"),
                             "theme": v.get("theme", ""),
                             "has_standout_accessory": bool(v.get("has_standout_accessory", False)),
+                            "face_hidden": bool(v.get("face_hidden", False)),
+                            "unusual_skin_tone": bool(v.get("unusual_skin_tone", False)),
+                            "clutter": bool(v.get("clutter", False)),
+                            "funny": bool(v.get("funny", False)),
                         }
                 return verdicts
             except (ValueError, AttributeError, TypeError):

@@ -14,9 +14,10 @@ from skin_searcher.config import (
     save_settings,
     set_api_key,
 )
+from skin_searcher.eval import run_offline_eval
 from skin_searcher.group_stats import GroupTracker
 from skin_searcher.judge import InvalidApiKey
-from skin_searcher.pipeline import run_auto, run_usernames
+from skin_searcher.pipeline import refresh_catalog, reset_catalog, run_auto, run_usernames
 from skin_searcher.roblox import make_session
 from skin_searcher.server import open_folder, show_discovery, show_gallery
 from skin_searcher.taste import TasteModel, feedback_stats
@@ -129,12 +130,25 @@ def menu_action(choice, session, settings):
         menu_group_stats()
         return True
     elif choice == "8":
+        refresh_catalog(session)
+        return True
+    elif choice == "9":
+        run_offline_eval()
+        return True
+    elif choice == "10":
+        confirm = input("Are you sure you want to reset the catalog? (y/N): ").strip().lower()
+        if confirm == "y":
+            reset_catalog()
+        else:
+            print("Cancelled.")
+        return True
+    elif choice == "11":
         open_folder(OUTPUT_DIR)
         return False
-    elif choice == "9":
+    elif choice == "12":
         menu_settings(settings)
         return False
-    elif choice == "10":
+    elif choice == "13":
         set_api_key()
     else:
         print("Pick a number from the menu.")
@@ -163,16 +177,19 @@ def menu():
         else:
             print("  Taste model: on (retrained before each search)")
         print()
-        print("   1) Find avatars in groups   (best)")
-        print("   2) Find avatars by keyword  (slower)")
+        print("   1) Find avatars in groups       (best)")
+        print("   2) Find avatars by keyword      (slower)")
         print("   3) Save specific usernames")
-        print("   4) Review avatars in a grid  (teach it your taste)")
-        print("   5) Discover new avatars      (rate them fast)")
-        print("   6) Train my taste model      (learns from your ratings)")
-        print("   7) View group yield stats    (performance breakdown)")
-        print("   8) Open the avatars folder")
-        print("   9) Settings")
-        print("  10) Change Gemini API key")
+        print("   4) Review avatars in a grid     (teach it your taste)")
+        print("   5) Discover new avatars         (rate them fast)")
+        print("   6) Train my taste model         (learns from your ratings)")
+        print("   7) View group yield stats       (performance leaderboard)")
+        print("   8) Refresh catalog              (check name & look changes)")
+        print("   9) Offline evaluation & metrics (test filters on ratings)")
+        print("  10) Reset catalog                (clear saved skins & seen cache)")
+        print("  11) Open the avatars folder")
+        print("  12) Settings")
+        print("  13) Change Gemini API key")
         print("   0) Quit")
         try:
             choice = input("\nChoose: ").strip()
@@ -183,7 +200,7 @@ def menu():
         except KeyboardInterrupt:
             print("\nBack to the menu.")
         except InvalidApiKey:
-            print("\nGemini rejected your API key. Choose 10 to enter a new one.")
+            print("\nGemini rejected your API key. Choose 13 to enter a new one.")
         except EOFError:
             return
 
@@ -207,6 +224,9 @@ def main():
     mode.add_argument("--discover", nargs="*", metavar="WORD",
                       help="rate fresh avatars from groups with the arrow keys (default words: outfits fashion)")
     mode.add_argument("--group-stats", action="store_true", help="display performance yield stats for all explored groups")
+    mode.add_argument("--eval", action="store_true", help="run offline evaluation of taste model and color filters")
+    mode.add_argument("--refresh", action="store_true", help="re-resolve usernames and check for changed avatar looks")
+    mode.add_argument("--reset-catalog", action="store_true", help="reset catalog avatars, metadata, and seen cache")
 
     parser.add_argument("--per-group", type=int, default=settings["per_group"],
                         help="new members to judge per group (default %(default)s)")
@@ -223,9 +243,22 @@ def main():
                         help="AI match score (1-10) an avatar needs to be saved (default %(default)s)")
     parser.add_argument("--taste-keep", type=int, default=settings["taste_keep"],
                         help="taste model keeps this %% of your Perfects; lower = pickier, 100 = model off (default %(default)s)")
+    parser.add_argument("--use-vibrance-filter", type=int, default=settings.get("use_vibrance_filter", 1),
+                        help="pre-filter plain avatars before Gemini: 1=on, 0=off (default %(default)s)")
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    session = make_session()
+
+    if args.eval:
+        run_offline_eval()
+        return
+    if args.refresh:
+        refresh_catalog(session)
+        return
+    if args.reset_catalog:
+        reset_catalog()
+        return
     if args.group_stats:
         menu_group_stats()
         return
@@ -233,9 +266,9 @@ def main():
         show_gallery(max_followers=args.max_followers)
         return
     if args.discover is not None:
-        show_discovery(args.discover or DISCOVER_DEFAULT_TERMS, make_session(), args.max_followers)
+        show_discovery(args.discover or DISCOVER_DEFAULT_TERMS, session, args.max_followers)
         return
-    session = make_session()
+
     seen = load_seen()
     if args.usernames:
         run_usernames(args, session, seen)
@@ -247,4 +280,4 @@ def main():
     try:
         run_auto(args, session, seen, api_key)
     except InvalidApiKey:
-        sys.exit("Gemini rejected the API key - set a new one from the menu (option 10)")
+        sys.exit("Gemini rejected the API key - set a new one from the menu (option 13)")

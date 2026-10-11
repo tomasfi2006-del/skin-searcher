@@ -41,9 +41,12 @@ from skin_searcher.judge import (
     InvalidApiKey,
     embed_image,
 )
+from skin_searcher.eval import run_offline_eval
 from skin_searcher.pipeline import (
     AutoRun,
     CandidateFeed,
+    refresh_catalog,
+    reset_catalog,
     run_auto,
     run_usernames,
     save_avatar,

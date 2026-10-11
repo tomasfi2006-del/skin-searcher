@@ -46,7 +46,13 @@ GEMINI_MIN_INTERVAL = 4.2
 
 # Application constants
 DISCOVER_DEFAULT_TERMS = ["outfits", "fashion"]
-DISLIKE_REASONS = ["Too plain", "Messy / random mix", "Not my style"]
+DISLIKE_REASONS = [
+    "Too plain",
+    "Messy / cluttered",
+    "Face hidden / weird head",
+    "Not my style",
+    "Default / generic",
+]
 NAME_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 
 DEFAULT_SETTINGS = {
@@ -57,8 +63,10 @@ DEFAULT_SETTINGS = {
     "batch_size": 10,
     "min_score": 8,
     "taste_keep": 90,
-    "group_bail_min_eval": 40,   # Minimum evaluations before checking early bail on low yield
-    "group_bail_min_yield": 0.0, # Bail if yield is at or below this percentage after min_eval
+    "group_bail_min_eval": 80,   # Statistical threshold: min 80 evaluations (avoids abandoning 5% yield groups by chance)
+    "group_bail_min_yield": 0.0, # Bail if 0 saved after 80 evaluations
+    "use_vibrance_filter": 1,    # Pre-filter: 1 = on (skip plain avatars before Gemini), 0 = off
+    "vibrance_min": 4,           # Calibrated colourful threshold (retains 95%+ of liked avatars)
 }
 
 SETTING_LABELS = {
@@ -70,6 +78,7 @@ SETTING_LABELS = {
     "min_score": "Minimum AI match score to save (1-10)",
     "taste_keep": "Taste model: keep this % of your Perfects (100 = off)",
     "group_bail_min_eval": "Group yield: min members checked before early bail",
+    "use_vibrance_filter": "Local color pre-filter (1=on, 0=off)",
 }
 
 
