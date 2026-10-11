@@ -265,10 +265,6 @@ class AutoRun:
                 theme_str = f" [{verdict.get('theme')}]" if verdict.get("theme") else ""
                 colors_str = f" ({', '.join(verdict.get('dominant_colors', []))})" if verdict.get("dominant_colors") else ""
                 flags = []
-                if verdict.get("face_hidden"):
-                    flags.append("face-hidden")
-                if verdict.get("unusual_skin_tone"):
-                    flags.append("unusual-skin")
                 if verdict.get("clutter"):
                     flags.append("cluttered")
                 if verdict.get("funny"):

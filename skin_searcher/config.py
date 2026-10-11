@@ -49,7 +49,6 @@ DISCOVER_DEFAULT_TERMS = ["outfits", "fashion"]
 DISLIKE_REASONS = [
     "Too plain",
     "Messy / cluttered",
-    "Face hidden / weird head",
     "Not my style",
     "Default / generic",
 ]
